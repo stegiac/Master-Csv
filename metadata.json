@@ -1,5 +1,5 @@
 {
-  "name": "Master Import Aziende",
+  "name": "Import Aziende con Master",
   "description": "An AI-powered tool to aggregate product data from CSVs, PDFs, and the Web to generate perfect E-Commerce import files.",
   "requestFramePermissions": []
 }
