@@ -4,13 +4,14 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "preinstall": "rm -rf package-lock.json node_modules",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "start": "node server.js"
   },
   "dependencies": {
-    "@google/genai": "^0.0.1",
+    "@google/genai": "^0.1.2",
     "express": "^4.18.2",
     "lucide-react": "^0.344.0",
     "pdfjs-dist": "4.8.69",
