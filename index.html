@@ -4,8 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>E-Com Import AI Master</title>
-    <!-- Manteniamo Tailwind via CDN per semplicità e velocità, 
-         ma in produzione si consiglia di installarlo via npm -->
+    <!-- Tailwind via CDN per setup rapido. In prod si consiglia PostCSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
       /* Custom scrollbar for a cleaner look */
@@ -27,18 +26,18 @@
   <script type="importmap">
 {
   "imports": {
-    "path": "https://esm.sh/path@^0.12.7",
+    "react": "https://esm.sh/react@^19.2.3",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "xlsx": "https://esm.sh/xlsx@^0.18.5",
     "@google/genai": "https://esm.sh/@google/genai@^1.33.0",
     "lucide-react": "https://esm.sh/lucide-react@^0.561.0",
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "react": "https://esm.sh/react@^19.2.3",
-    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
+    "pdfjs-dist": "https://esm.sh/pdfjs-dist@^5.4.449",
     "vite": "https://esm.sh/vite@^7.2.7",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
     "express": "https://esm.sh/express@^5.2.1",
-    "url": "https://esm.sh/url@^0.11.4",
-    "xlsx": "https://esm.sh/xlsx@^0.18.5",
-    "pdfjs-dist": "https://esm.sh/pdfjs-dist@^5.4.449"
+    "path": "https://esm.sh/path@^0.12.7",
+    "url": "https://esm.sh/url@^0.11.4"
   }
 }
 </script>
