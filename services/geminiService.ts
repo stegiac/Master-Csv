@@ -15,45 +15,56 @@ const cleanJson = (text: string) => {
 
 export const checkApiHealth = async (): Promise<{online: boolean, error?: string}> => {
   try {
-    const res = await fetch('/api/health');
+    // Usiamo cache: 'no-store' per evitare che Hostinger/Browser servano una risposta vecchia
+    const res = await fetch('/api/health', { cache: 'no-store' });
+    
+    if (res.status === 404) {
+      return { online: false, error: "Errore 404: Il server Node non riceve le richieste API. Controlla il Proxy." };
+    }
+
     if (!res.ok) return { online: false, error: `Status ${res.status}` };
+    
     const data = await res.json();
-    return { online: data.status === 'online', error: data.apiKeyConfigured ? undefined : "API_KEY non configurata sul server" };
+    return { 
+      online: data.status === 'online', 
+      error: data.apiKeyConfigured ? undefined : "Attenzione: API_KEY non configurata nel server" 
+    };
   } catch (e) {
-    return { online: false, error: "Server non raggiungibile" };
+    return { online: false, error: "Connessione rifiutata. Server Node.js spento o crashato." };
   }
 };
 
 const callGeminiProxy = async (action: string, payload: any) => {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 50000);
+  const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s per ricerche web profonde
 
   try {
-    // IMPORTANTE: Su Hostinger usa sempre il path relativo per evitare problemi di protocollo http/https
     const response = await fetch('/api/gemini', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
       body: JSON.stringify({ action, payload }),
       signal: controller.signal
     });
     
     clearTimeout(timeoutId);
     
+    if (response.status === 404) {
+      throw new Error("Il server ha risposto con 404. La configurazione Node.js su Hostinger non è corretta.");
+    }
+
     const contentType = response.headers.get("content-type");
     if (!contentType || !contentType.includes("application/json")) {
-      const text = await response.text();
-      const isHtml = text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html');
-      if (isHtml) {
-        throw new Error("Il server ha restituito HTML invece di JSON. Possibile errore di configurazione Hostinger o redirect HTTPS.");
-      }
-      throw new Error("Risposta del server non valida.");
+      throw new Error("Risposta non valida dal server (atteso JSON, ricevuto altro).");
     }
 
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || `Errore ${response.status}`);
+    if (!response.ok) throw new Error(data.error || `Errore Server ${response.status}`);
     return data;
   } catch (e: any) {
-    if (e.name === 'AbortError') throw new Error("TIMEOUT AI (50s)");
+    if (e.name === 'AbortError') throw new Error("L'operazione AI ha impiegato troppo tempo (Timeout 60s)");
     throw e;
   }
 };
@@ -84,7 +95,7 @@ export const processProductWithGemini = async (params: any): Promise<any> => {
     if (aiVal) {
       finalValues[field.name] = String(aiVal);
       finalAudit[field.name] = {
-        source: aiResult.audit?.[field.name]?.source || "AI",
+        source: aiResult.audit?.[field.name]?.source || "Ricerca AI",
         sourceType: 'AI', status: 'ENRICHED', confidence: 'medium',
         warnings: [], pipelineVersion: PIPELINE_VERSION
       };

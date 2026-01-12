@@ -8,20 +8,29 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+
+// Trust proxy è fondamentale su Hostinger per recuperare IP e protocollo corretti
 app.set('trust proxy', 1);
+
 app.use(express.json({ limit: '50mb' }));
 
 const PORT = process.env.PORT || 3000;
 
-// HEALTH CHECK - Spostato in alto per massima priorità
+// Middleware di logging per debug in produzione (visibile nei log di Hostinger)
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  next();
+});
+
+// 1. ROTTE API (Devono essere definite PRIMA dei file statici)
 app.get('/api/health', (req, res) => {
-  // Fixed: Always use process.env.API_KEY exclusively
   const key = process.env.API_KEY;
   res.setHeader('Content-Type', 'application/json');
   res.json({ 
     status: 'online', 
     apiKeyConfigured: !!key,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    env: process.env.NODE_ENV || 'production'
   });
 });
 
@@ -29,13 +38,11 @@ app.post('/api/gemini', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   const { action, payload } = req.body;
   
-  // Fixed: Ensure API key is present exclusively from process.env.API_KEY
   if (!process.env.API_KEY) {
-    return res.status(401).json({ success: false, error: "API_KEY non configurata." });
+    return res.status(401).json({ success: false, error: "API_KEY non configurata sul server Hostinger." });
   }
 
   try {
-    // Fixed: Initialize GoogleGenAI right before use with direct env access
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     if (action === 'process') {
@@ -48,28 +55,25 @@ app.post('/api/gemini', async (req, res) => {
           tools: [{ googleSearch: {} }]
         }
       });
-      // Fixed: Access .text as a property, not a method
       return res.json({ success: true, data: response.text });
     }
 
-    // Fixed: Implemented 'explain' action required by the frontend
     if (action === 'explain') {
       const { fieldName, description } = payload;
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: `Spiega il significato del campo e-commerce "${fieldName}" (${description}) a un utente finale in una frase semplice.`,
+        contents: `Spiega il significato del campo "${fieldName}" (${description}) in una frase.`,
       });
       return res.json({ success: true, data: response.text });
     }
 
-    // Fixed: Implemented 'generateSchema' action required by the frontend
     if (action === 'generateSchema') {
       const { headers } = payload;
       const response = await ai.models.generateContent({
         model: 'gemini-3-pro-preview',
-        contents: `Analizza queste intestazioni Excel: ${headers.join(', ')}. Genera uno schema JSON di mappatura.`,
+        contents: `Analizza intestazioni: ${headers.join(', ')}. Genera schema JSON di mappatura.`,
         config: {
-          systemInstruction: "Genera un array JSON di oggetti con {name, description, prompt, fieldClass}. fieldClass deve essere 'HARD' per dati tecnici esatti o 'SOFT' per campi descrittivi.",
+          systemInstruction: "Genera un array JSON di oggetti con {name, description, prompt, fieldClass}.",
           responseMimeType: "application/json"
         }
       });
@@ -83,19 +87,20 @@ app.post('/api/gemini', async (req, res) => {
   }
 });
 
-// STATIC FILES
-app.use(express.static(path.join(__dirname, 'dist')));
+// 2. FILE STATICI (Dopo le API)
+// Assicurati che la cartella 'dist' esista dopo il build
+const distPath = path.join(__dirname, 'dist');
+app.use(express.static(distPath));
 
-// SPA FALLBACK
+// 3. SPA FALLBACK (Sempre per ultimo)
 app.get('*', (req, res) => {
-  // Se la richiesta inizia con /api ma non è stata gestita, restituisci 404 JSON, non HTML
   if (req.url.startsWith('/api')) {
-    res.status(404).json({ error: `Rotta API ${req.url} non trovata.` });
-  } else {
-    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+    return res.status(404).json({ error: `API ${req.url} non trovata.` });
   }
+  res.sendFile(path.join(distPath, 'index.html'));
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server attivo su porta ${PORT}`);
+  console.log(`🚀 Master AI Server in esecuzione su porta ${PORT}`);
+  console.log(`📂 Cartella statici: ${distPath}`);
 });
