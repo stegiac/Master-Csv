@@ -4,7 +4,7 @@ import { Play, Download, Loader2, AlertTriangle, Check, ScrollText, X, Info, Shi
 import { UploadedFile, SchemaField, FileType, ProcessedProduct, ColumnMapping, AppSettings, SourceInfo, Warning } from '../types';
 import { generateExcelExport } from '../services/excelService';
 import { processProductWithGemini } from '../services/geminiService';
-import { extractTextFromPdf, findRelevantPdfContext, ParsedPdf, renderPageToBase64, findBestPageForSku } from '../services/pdfService';
+import { extractTextFromPdf, findRelevantPdfContext, ParsedPdf } from '../services/pdfService';
 
 interface Props {
   files: UploadedFile[];
@@ -135,6 +135,13 @@ const ProcessingView: React.FC<Props> = ({
     generateExcelExport(data, sources, `export_${brandName || 'products'}`);
   };
 
+  // Fixed line 140: Added explicit type cast to SourceInfo[] to avoid 'unknown' type error in strict mode
+  const hasBlockingErrors = products.some(p => 
+    (Object.values(p.sourceMap) as SourceInfo[]).some(si => 
+      si.warnings?.some(w => w.action === 'block_export')
+    )
+  );
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
@@ -149,9 +156,18 @@ const ProcessingView: React.FC<Props> = ({
             </button>
           )}
           {progress > 0 && !isProcessing && (
-            <button onClick={handleExport} className="bg-emerald-600 text-white px-6 py-2 rounded-lg flex items-center gap-2 hover:bg-emerald-700">
-              <Download size={18} /> Export Finale
-            </button>
+            <div className="flex flex-col items-end gap-1">
+               <button 
+                 disabled={hasBlockingErrors}
+                 onClick={handleExport} 
+                 className={`px-6 py-2 rounded-lg flex items-center gap-2 transition-all ${
+                   hasBlockingErrors ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-md'
+                 }`}
+               >
+                 <Download size={18} /> Export Finale
+               </button>
+               {hasBlockingErrors && <span className="text-[10px] text-red-500 font-bold uppercase tracking-wider">Export bloccato da errori gravi</span>}
+            </div>
           )}
         </div>
       </div>
@@ -175,9 +191,10 @@ const ProcessingView: React.FC<Props> = ({
               const allSourceInfo = (Object.values(p.sourceMap) as SourceInfo[]);
               const errCount = allSourceInfo.reduce((acc, curr) => acc + (curr.warnings?.filter(w => w.severity === 'error').length || 0), 0);
               const warnCount = allSourceInfo.reduce((acc, curr) => acc + (curr.warnings?.filter(w => w.severity === 'warn').length || 0), 0);
+              const isBlocking = allSourceInfo.some(si => si.warnings?.some(w => w.action === 'block_export'));
               
               return (
-                <tr key={idx} className="border-t hover:bg-slate-50/50 transition-colors">
+                <tr key={idx} className={`border-t hover:bg-slate-50/50 transition-colors ${isBlocking ? 'bg-red-50/30' : ''}`}>
                   <td className="px-6 py-4">
                     {p.status === 'processing' ? <Loader2 className="animate-spin text-indigo-500" size={18} /> : 
                      p.status === 'completed' ? <Check className="text-emerald-500" size={18} /> : 
@@ -192,7 +209,7 @@ const ProcessingView: React.FC<Props> = ({
                       <ScrollText size={16} className="text-indigo-400 group-hover:text-indigo-600" />
                       <span className="text-xs font-medium text-slate-600 group-hover:underline">Audit Trail</span>
                       <div className="flex gap-1">
-                        {errCount > 0 && <span className="bg-red-100 text-red-600 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-0.5"><AlertCircle size={8}/> {errCount}</span>}
+                        {errCount > 0 && <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-0.5 ${isBlocking ? 'bg-red-600 text-white animate-pulse' : 'bg-red-100 text-red-600'}`}><AlertCircle size={8}/> {errCount}</span>}
                         {warnCount > 0 && <span className="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-0.5"><AlertTriangle size={8}/> {warnCount}</span>}
                       </div>
                     </button>
