@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect } from 'react';
-import { Play, Download, Loader2, AlertTriangle, Check, ScrollText, X, Info, ShieldCheck, Search, Database, AlertCircle, Bookmark, Zap, ExternalLink } from 'lucide-react';
-import { UploadedFile, SchemaField, FileType, ProcessedProduct, ColumnMapping, AppSettings, SourceInfo, Warning } from '../types';
+import React, { useState, useEffect, useRef } from 'react';
+import { Play, Download, Loader2, AlertTriangle, Check, ScrollText, X, Info, ShieldCheck, Database, AlertCircle, Bookmark, Zap, ExternalLink, Terminal, ChevronDown, ChevronUp, Lock } from 'lucide-react';
+import { UploadedFile, SchemaField, FileType, ProcessedProduct, ColumnMapping, AppSettings, SourceInfo } from '../types';
 import { generateExcelExport } from '../services/excelService';
 import { processProductWithGemini } from '../services/geminiService';
 import { extractTextFromPdf, findRelevantPdfContext, ParsedPdf } from '../services/pdfService';
@@ -20,6 +20,12 @@ interface Props {
   columnMapping: ColumnMapping;
 }
 
+interface LogEntry {
+  timestamp: string;
+  message: string;
+  type: 'info' | 'success' | 'warn' | 'error' | 'ai';
+}
+
 const ProcessingView: React.FC<Props> = ({ 
   files, schema, settings, brandName,
   baseImageColumn, baseSkuColumn, baseEanColumn,
@@ -30,10 +36,20 @@ const ProcessingView: React.FC<Props> = ({
   const [progress, setProgress] = useState(0);
   const [parsedPdfs, setParsedPdfs] = useState<ParsedPdf[]>([]);
   const [selectedLogProduct, setSelectedLogProduct] = useState<ProcessedProduct | null>(null);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [showTerminal, setShowTerminal] = useState(true);
+  const [currentTask, setCurrentTask] = useState<string>('In attesa...');
+  
+  const terminalRef = useRef<HTMLDivElement>(null);
 
   const baseFile = files.find(f => f.type === FileType.BASE);
   const manuFile = files.find(f => f.type === FileType.MANUFACTURER);
   const pdfFiles = files.filter(f => f.type === FileType.PDF);
+
+  const addLog = (message: string, type: LogEntry['type'] = 'info') => {
+    const entry = { timestamp: new Date().toLocaleTimeString(), message, type };
+    setLogs(prev => [entry, ...prev].slice(0, 100));
+  };
 
   useEffect(() => {
     if (baseFile && products.length === 0) {
@@ -46,33 +62,64 @@ const ProcessingView: React.FC<Props> = ({
         logs: []
       }));
       setProducts(initial as any);
+      addLog(`Rilevati ${initial.length} articoli da elaborare.`, 'info');
     }
   }, [baseFile, baseSkuColumn, baseEanColumn]);
 
-  const startProcessing = async () => {
-    setIsProcessing(true);
-    let currentParsed = [...parsedPdfs];
+  const hasBlockingErrors = () => {
+    return products.some(p => 
+      // Fix: Explicitly cast to SourceInfo[] to fix 'unknown' type error in hasBlockingErrors
+      (Object.values(p.sourceMap) as SourceInfo[]).some(audit => 
+        audit.warnings?.some(w => w.action === 'block_export')
+      )
+    );
+  };
 
+  const startProcessing = async () => {
+    if (isProcessing) return;
+    setIsProcessing(true);
+    addLog("Inizio pipeline industriale...", 'info');
+
+    let currentParsed = [...parsedPdfs];
     if (pdfFiles.length > 0 && currentParsed.length === 0) {
+      setCurrentTask("Indicizzazione cataloghi PDF...");
       const indexed: ParsedPdf[] = [];
-      for(let f of pdfFiles) if (f.rawFile) indexed.push(await extractTextFromPdf(f.rawFile));
+      for(let f of pdfFiles) {
+        if (f.rawFile) {
+          try {
+            const parsed = await extractTextFromPdf(f.rawFile);
+            indexed.push(parsed);
+            addLog(`PDF ${f.name} indicizzato (${parsed.pages.length} pgg).`, 'success');
+          } catch(e: any) {
+            addLog(`Errore PDF ${f.name}: ${e.message}`, 'error');
+          }
+        }
+      }
       currentParsed = indexed;
       setParsedPdfs(indexed);
     }
 
-    const newProducts = [...products];
-    let completed = 0;
+    const total = products.length;
+    let completedCount = 0;
 
-    for (let i = 0; i < newProducts.length; i++) {
-      if (newProducts[i].status === 'completed') { completed++; continue; }
-      const p = newProducts[i];
-      p.status = 'processing';
-      setProducts([...newProducts]);
+    for (let i = 0; i < total; i++) {
+      const p = products[i];
+      if (p.status === 'completed') { completedCount++; continue; }
+
+      addLog(`[${i+1}/${total}] Elaborazione ${p.sku}...`, 'info');
+      setCurrentTask(`Articolo ${i+1}/${total}: ${p.sku}`);
+      
+      setProducts(prev => {
+        const next = [...prev];
+        next[i] = { ...next[i], status: 'processing' };
+        return next;
+      });
 
       try {
         const pdfContext = findRelevantPdfContext(currentParsed, p.sku, p.ean);
         const mappedValues: Record<string, any> = {};
         let manuData = null;
+
         if (manuFile) {
           manuData = manuFile.data.find((row: any) => String(row[manuSkuColumn]) === p.sku);
           if (manuData) {
@@ -91,38 +138,43 @@ const ProcessingView: React.FC<Props> = ({
           trustedDomains: settings.trustedDomains
         });
 
-        p.data = result.values;
-        p.sourceMap = result.audit;
-        p.rawResponse = result.rawResponse;
-        p.status = 'completed';
+        setProducts(prev => {
+          const next = [...prev];
+          next[i] = { 
+            ...next[i], 
+            data: result.values, 
+            sourceMap: result.audit, 
+            rawResponse: result.rawResponse,
+            status: 'completed' 
+          };
+          return next;
+        });
+        addLog(`Completato: ${p.sku}`, 'success');
 
       } catch (e: any) {
-        p.status = 'error';
-        p.error = e.message;
+        addLog(`ERRORE [${p.sku}]: ${e.message}`, 'error');
+        setProducts(prev => {
+          const next = [...prev];
+          next[i] = { ...next[i], status: 'error', error: e.message };
+          return next;
+        });
+        if (e.message.includes("401") || e.message.includes("TIMEOUT")) break;
       }
 
-      completed++;
-      setProgress(Math.round((completed / newProducts.length) * 100));
-      setProducts([...newProducts]);
-      await new Promise(r => setTimeout(r, 800)); 
+      completedCount++;
+      setProgress(Math.round((completedCount / total) * 100));
+      await new Promise(r => setTimeout(r, 300));
     }
-    setIsProcessing(false);
-  };
 
-  const getConfidenceBadge = (confidence: string) => {
-    const colors = {
-      high: 'bg-green-100 text-green-700',
-      medium: 'bg-yellow-100 text-yellow-700',
-      low: 'bg-red-100 text-red-700'
-    };
-    return (
-      <span className={`text-[8px] px-1.5 py-0.5 rounded-sm font-black uppercase ${(colors as any)[confidence] || colors.medium}`}>
-        {confidence}
-      </span>
-    );
+    setIsProcessing(false);
+    setCurrentTask("Pipeline terminata.");
   };
 
   const handleExport = () => {
+    if (hasBlockingErrors()) {
+      alert("ATTENZIONE: Esportazione bloccata. Sono presenti errori critici di validazione (campi obbligatori mancanti o valori non ammessi). Controlla gli Audit.");
+      return;
+    }
     const data = products.map(p => ({ SKU: p.sku, EAN: p.ean, ...p.data }));
     const sources = products.map(p => {
       const s: any = { SKU: p.sku };
@@ -132,181 +184,134 @@ const ProcessingView: React.FC<Props> = ({
       });
       return s;
     });
-    generateExcelExport(data, sources, `export_${brandName || 'products'}`);
+    generateExcelExport(data, sources, `export_${brandName || 'prodotti'}`);
   };
 
-  // Fixed line 140: Added explicit type cast to SourceInfo[] to avoid 'unknown' type error in strict mode
-  const hasBlockingErrors = products.some(p => 
-    (Object.values(p.sourceMap) as SourceInfo[]).some(si => 
-      si.warnings?.some(w => w.action === 'block_export')
-    )
-  );
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 flex flex-col h-full animate-in fade-in">
       <div className="flex justify-between items-center bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
         <div>
-          <h3 className="text-lg font-bold">Monitor Pipeline Industriale</h3>
-          <p className="text-sm text-gray-500">Motore di Riconciliazione v{settings.pipelineVersion}</p>
+          <h3 className="text-lg font-bold flex items-center gap-2">
+            Monitor Pipeline Industriale
+            {isProcessing && <Loader2 className="animate-spin text-indigo-500" size={20} />}
+          </h3>
+          <p className="text-sm text-gray-500">{currentTask}</p>
         </div>
         <div className="flex gap-2">
           {!isProcessing && (
-            <button onClick={startProcessing} className="bg-indigo-600 text-white px-6 py-2 rounded-lg flex items-center gap-2 hover:bg-indigo-700 shadow-lg transition-all">
-              <Play size={18} /> Avvia Pipeline
+            <button onClick={startProcessing} className="bg-indigo-600 text-white px-6 py-2 rounded-lg flex items-center gap-2 hover:bg-indigo-700 font-bold shadow-lg">
+              <Play size={18} /> Avvia
             </button>
           )}
           {progress > 0 && !isProcessing && (
-            <div className="flex flex-col items-end gap-1">
-               <button 
-                 disabled={hasBlockingErrors}
-                 onClick={handleExport} 
-                 className={`px-6 py-2 rounded-lg flex items-center gap-2 transition-all ${
-                   hasBlockingErrors ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-md'
-                 }`}
-               >
-                 <Download size={18} /> Export Finale
-               </button>
-               {hasBlockingErrors && <span className="text-[10px] text-red-500 font-bold uppercase tracking-wider">Export bloccato da errori gravi</span>}
-            </div>
+            <button 
+              onClick={handleExport} 
+              className={`${hasBlockingErrors() ? 'bg-gray-400' : 'bg-emerald-600 hover:bg-emerald-700'} text-white px-6 py-2 rounded-lg flex items-center gap-2 font-bold shadow-md transition-colors`}
+            >
+              <Download size={18} /> Scarica Excel {hasBlockingErrors() && '(Bloccato)'}
+            </button>
           )}
         </div>
       </div>
 
-      <div className="w-full bg-gray-100 rounded-full h-2">
-        <div className="bg-indigo-600 h-2 rounded-full transition-all duration-500 shadow-inner" style={{ width: `${progress}%` }}></div>
+      <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
+        <div className={`h-full transition-all duration-500 ${progress === 100 ? 'bg-emerald-500' : 'bg-indigo-600'}`} style={{ width: `${progress}%` }} />
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
-        <table className="w-full text-sm text-left">
-          <thead className="bg-gray-50 text-gray-500 uppercase text-[10px] font-bold tracking-widest border-b">
-            <tr>
-              <th className="px-6 py-4 w-16">Stato</th>
-              <th className="px-6 py-4">SKU / Prodotto</th>
-              <th className="px-6 py-4">Audit & Alerts</th>
-              <th className="px-6 py-4">Status Campi</th>
-            </tr>
-          </thead>
-          <tbody>
-            {products.map((p, idx) => {
-              const allSourceInfo = (Object.values(p.sourceMap) as SourceInfo[]);
-              const errCount = allSourceInfo.reduce((acc, curr) => acc + (curr.warnings?.filter(w => w.severity === 'error').length || 0), 0);
-              const warnCount = allSourceInfo.reduce((acc, curr) => acc + (curr.warnings?.filter(w => w.severity === 'warn').length || 0), 0);
-              const isBlocking = allSourceInfo.some(si => si.warnings?.some(w => w.action === 'block_export'));
-              
-              return (
-                <tr key={idx} className={`border-t hover:bg-slate-50/50 transition-colors ${isBlocking ? 'bg-red-50/30' : ''}`}>
-                  <td className="px-6 py-4">
-                    {p.status === 'processing' ? <Loader2 className="animate-spin text-indigo-500" size={18} /> : 
-                     p.status === 'completed' ? <Check className="text-emerald-500" size={18} /> : 
-                     p.status === 'error' ? <AlertTriangle className="text-red-500" size={18} /> : <Bookmark className="text-gray-300" size={18} />}
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="font-mono font-bold text-slate-800">{p.sku}</div>
-                    <div className="text-[10px] text-gray-400">{p.ean}</div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <button onClick={() => setSelectedLogProduct(p)} className="flex items-center gap-2 group">
-                      <ScrollText size={16} className="text-indigo-400 group-hover:text-indigo-600" />
-                      <span className="text-xs font-medium text-slate-600 group-hover:underline">Audit Trail</span>
-                      <div className="flex gap-1">
-                        {errCount > 0 && <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-0.5 ${isBlocking ? 'bg-red-600 text-white animate-pulse' : 'bg-red-100 text-red-600'}`}><AlertCircle size={8}/> {errCount}</span>}
-                        {warnCount > 0 && <span className="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-0.5"><AlertTriangle size={8}/> {warnCount}</span>}
-                      </div>
-                    </button>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex flex-wrap gap-1 max-w-[200px]">
-                       {allSourceInfo.slice(0, 4).map((info, ii) => (
-                         <div key={ii} className={`w-2 h-2 rounded-full ${info.status === 'LOCKED' ? 'bg-indigo-500' : info.status === 'STRICT' ? 'bg-emerald-500' : 'bg-blue-400'}`} title={`${info.source} (${info.status})`} />
-                       ))}
-                       {allSourceInfo.length > 4 && <span className="text-[8px] text-gray-400">+{allSourceInfo.length - 4}</span>}
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm flex-grow">
+        <div className="overflow-y-auto max-h-[500px]">
+          <table className="w-full text-sm text-left">
+            <thead className="bg-gray-50 text-gray-500 uppercase text-[10px] font-bold border-b sticky top-0 z-10">
+              <tr>
+                <th className="px-6 py-4 w-16 text-center">Stato</th>
+                <th className="px-6 py-4">SKU</th>
+                <th className="px-6 py-4 text-center">Audit</th>
+                <th className="px-6 py-4">Status Elaborazione</th>
+              </tr>
+            </thead>
+            <tbody>
+              {products.map((p, idx) => {
+                // Fix: Explicitly cast to SourceInfo[] to fix 'unknown' type error for isBlocked check
+                const isBlocked = (Object.values(p.sourceMap) as SourceInfo[]).some(a => a.warnings?.some(w => w.action === 'block_export'));
+                return (
+                  <tr key={idx} className={`border-t hover:bg-slate-50 ${isBlocked ? 'bg-red-50/20' : ''}`}>
+                    <td className="px-6 py-4 text-center">
+                      {p.status === 'processing' ? <Loader2 className="animate-spin text-indigo-500 mx-auto" size={18} /> : 
+                       p.status === 'completed' ? (isBlocked ? <AlertTriangle className="text-amber-500 mx-auto" size={18} /> : <Check className="text-emerald-500 mx-auto" size={18} />) : 
+                       p.status === 'error' ? <X className="text-red-500 mx-auto" size={18} /> : <Bookmark className="text-gray-300 mx-auto" size={18} />}
+                    </td>
+                    <td className="px-6 py-4 font-mono font-bold text-slate-800">{p.sku}</td>
+                    <td className="px-6 py-4 text-center">
+                      <button onClick={() => setSelectedLogProduct(p)} className="p-2 hover:bg-indigo-50 rounded-full text-indigo-600 inline-block transition-colors">
+                        <ScrollText size={18} />
+                      </button>
+                    </td>
+                    <td className="px-6 py-4">
+                      {isBlocked && <span className="text-red-600 font-bold text-[10px] uppercase flex items-center gap-1"><AlertCircle size={10} /> Validazione Fallita</span>}
+                      {p.status === 'completed' && !isBlocked && <span className="text-emerald-600 font-bold text-[10px] uppercase">Pronto</span>}
+                      {p.status === 'processing' && <span className="text-indigo-600 animate-pulse font-bold text-[10px] uppercase">In Corso...</span>}
+                      {p.status === 'error' && <span className="text-red-600 text-[10px]">{p.error}</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className={`bg-slate-900 rounded-xl overflow-hidden border border-slate-700 transition-all ${showTerminal ? 'h-64' : 'h-10'}`}>
+        <div className="bg-slate-800 px-4 py-2 flex justify-between items-center cursor-pointer" onClick={() => setShowTerminal(!showTerminal)}>
+          <span className="text-slate-300 font-mono text-xs flex items-center gap-2"><Terminal size={14} /> CONSOLE LOG SERVER</span>
+          {showTerminal ? <ChevronDown size={14} className="text-slate-500"/> : <ChevronUp size={14} className="text-slate-500"/>}
+        </div>
+        <div ref={terminalRef} className="p-4 font-mono text-[10px] overflow-y-auto h-52 text-slate-300 space-y-1">
+          {logs.map((log, i) => (
+            <div key={i} className="flex gap-2">
+              <span className="text-slate-500 shrink-0">[{log.timestamp}]</span>
+              <span className={log.type === 'error' ? 'text-red-400' : log.type === 'success' ? 'text-emerald-400' : log.type === 'ai' ? 'text-indigo-300 italic' : ''}>{log.message}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       {selectedLogProduct && (
         <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <div className="p-6 border-b flex justify-between items-center bg-slate-50">
-              <div className="flex items-center gap-3">
-                <div className="bg-indigo-600 p-2 rounded-xl text-white shadow-md">
-                   <ShieldCheck size={24} />
-                </div>
-                <div>
-                   <h4 className="font-bold text-lg text-slate-800 tracking-tight">Report SKU: {selectedLogProduct.sku}</h4>
-                   <p className="text-[10px] text-slate-400 uppercase font-bold tracking-widest">Confidence Analysis & Reconciliation</p>
-                </div>
-              </div>
-              <button onClick={() => setSelectedLogProduct(null)} className="p-2 hover:bg-slate-200 rounded-full transition-colors"><X /></button>
+          <div className="bg-white rounded-3xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
+            <div className="p-6 border-b flex justify-between items-center">
+              <h4 className="font-bold text-lg">Dettagli Audit: {selectedLogProduct.sku}</h4>
+              <button onClick={() => setSelectedLogProduct(null)} className="p-2 hover:bg-slate-100 rounded-full"><X /></button>
             </div>
-            
-            <div className="flex-grow overflow-y-auto p-8 bg-white space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                {schema.filter(f => f.enabled).map(field => {
+            <div className="flex-grow overflow-y-auto p-6 space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {schema.map(field => {
                   const info = selectedLogProduct.sourceMap[field.name];
                   const value = selectedLogProduct.data[field.name];
-                  if (!value && !info) return null;
-                  
+                  const hasError = info?.warnings?.some(w => w.severity === 'error');
                   return (
-                    <div key={field.id} className={`p-4 border rounded-2xl flex flex-col ${
-                      info?.status === 'LOCKED' ? 'bg-indigo-50/10 border-indigo-100' : 
-                      info?.warnings?.some(w => w.severity === 'error') ? 'bg-red-50/30 border-red-200' : 'bg-white border-slate-200'
-                    } shadow-sm transition-all hover:shadow-md`}>
-                      <div className="flex justify-between items-start mb-2">
-                        <div className="flex flex-col gap-1">
-                           <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider">{field.name}</span>
-                           <div className="flex gap-1.5 items-center">
-                              {info && getConfidenceBadge(info.confidence)}
-                              <span className={`text-[8px] px-1 rounded uppercase font-bold border ${info?.status === 'LOCKED' ? 'border-indigo-200 text-indigo-600' : 'border-slate-200 text-slate-400'}`}>{info?.status}</span>
-                           </div>
-                        </div>
-                        {info?.url && (
-                          <a href={info.url} target="_blank" className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors" title="Apri fonte web">
-                             <ExternalLink size={12} />
-                          </a>
-                        )}
+                    <div key={field.id} className={`p-4 border rounded-2xl ${hasError ? 'border-red-200 bg-red-50/10' : 'bg-white'}`}>
+                      <div className="text-[9px] font-black text-gray-400 mb-1 uppercase tracking-widest flex justify-between">
+                        {field.name}
+                        {info?.status === 'LOCKED' && <Lock size={10} className="text-indigo-500"/>}
+                        {info?.status === 'STRICT' && <ShieldCheck size={10} className="text-emerald-500"/>}
                       </div>
-                      
-                      <div className="text-sm font-bold text-slate-800 mb-3">{value || <span className="text-slate-300 italic">Vuoto</span>}</div>
-                      
+                      <div className="text-sm font-bold text-slate-800 mb-2">{value || '---'}</div>
                       {info && (
-                        <div className="space-y-2 pt-3 border-t border-slate-100">
-                          <div className="flex items-center gap-1.5 text-[9px] text-slate-500 font-bold">
-                             {info.sourceType === 'DERIVED' ? <Zap size={10} className="text-amber-500" /> : <Database size={10} />}
-                             <span>{info.source}</span>
+                        <div className="space-y-1">
+                          <div className="flex justify-between items-center text-[8px]">
+                            <span className="text-gray-500">{info.source}</span>
+                            <span className={`px-1 rounded ${info.confidence === 'high' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>{info.confidence}</span>
                           </div>
-                          
                           {info.warnings?.map((w, wi) => (
-                            <div key={wi} className={`flex items-start gap-1.5 text-[9px] font-bold p-1.5 rounded ${
-                               w.severity === 'error' ? 'bg-red-100 text-red-700' : 
-                               w.severity === 'warn' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
-                            }`}>
-                              {w.severity === 'error' ? <AlertCircle size={10} className="shrink-0" /> : <AlertTriangle size={10} className="shrink-0" />}
-                              <span>{w.message}</span>
+                            <div key={wi} className={`text-[8px] p-1 rounded font-bold ${w.severity === 'error' ? 'bg-red-600 text-white' : 'bg-amber-100 text-amber-800'}`}>
+                              {w.message}
                             </div>
                           ))}
-
-                          {info.evidence && (
-                            <div className="text-[9px] p-2 bg-slate-50 rounded-lg text-slate-500 italic border border-slate-100">
-                              "{info.evidence}"
-                            </div>
-                          )}
                         </div>
                       )}
                     </div>
                   );
                 })}
-              </div>
-              <div className="mt-8 border-t border-slate-100 pt-6">
-                 <h5 className="text-xs font-black text-slate-400 uppercase mb-3 flex items-center gap-2 tracking-widest"><Info size={16} /> Raw AI Trace</h5>
-                 <pre className="text-[10px] bg-slate-900 text-emerald-400 p-6 rounded-2xl overflow-x-auto whitespace-pre-wrap font-mono border border-slate-800 shadow-inner">
-                   {selectedLogProduct.rawResponse || "Dati deterministici (No AI Trace)."}
-                 </pre>
               </div>
             </div>
           </div>

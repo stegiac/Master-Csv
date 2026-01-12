@@ -1,8 +1,6 @@
 
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Configurazione Worker tramite unpkg per garantire compatibilità con i moduli ESM
-// Utilizziamo la versione specifica per coerenza con l'import map di index.html
 const PDFJS_VERSION = '5.4.530';
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
 
@@ -17,6 +15,7 @@ const normalizeForSearch = (str: string): string => {
 };
 
 export const extractTextFromPdf = async (file: File): Promise<ParsedPdf> => {
+  console.log(`[PDF] Inizio estrazione: ${file.name}`);
   const arrayBuffer = await file.arrayBuffer();
   const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
   const pdf = await loadingTask.promise;
@@ -27,18 +26,19 @@ export const extractTextFromPdf = async (file: File): Promise<ParsedPdf> => {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
       const textItems = textContent.items.map((item: any) => item.str).join(' ');
-      if (textItems.trim().length > 10) {
+      if (textItems.trim().length > 5) {
         pages.push({ pageNumber: i, text: textItems });
       }
     } catch (e) {
-      console.warn(`Errore parsing pagina ${i} di ${file.name}`, e);
+      console.warn(`[PDF] Errore pagina ${i}: ${file.name}`, e);
     }
   }
+  console.log(`[PDF] Estrazione completata: ${file.name} (${pages.length} pagine utili)`);
   return { fileName: file.name, pages };
 };
 
 /**
- * Ricerca robusta dello SKU/EAN nel PDF
+ * Ricerca ottimizzata dello SKU/EAN nel PDF
  */
 export const findRelevantPdfContext = (
   pdfIndex: ParsedPdf[], 
@@ -50,56 +50,23 @@ export const findRelevantPdfContext = (
   const skuClean = normalizeForSearch(sku);
   const eanClean = normalizeForSearch(ean);
   
-  const skuRegex = new RegExp(`(^|[^a-z0-9])${skuClean}([^a-z0-9]|$)`, 'i');
-
   for (const pdf of pdfIndex) {
     for (const page of pdf.pages) {
+      // Ottimizzazione: check semplice prima della normalizzazione pesante
       const pageTextClean = normalizeForSearch(page.text);
       
       const foundEan = eanClean.length > 5 && pageTextClean.includes(eanClean);
-      const foundSku = skuClean.length > 2 && skuRegex.test(pageTextClean);
+      const foundSku = skuClean.length > 3 && pageTextClean.includes(skuClean);
 
       if (foundEan || foundSku) {
+        console.log(`[PDF] Trovata corrispondenza in ${pdf.fileName} pag ${page.pageNumber}`);
         return {
-          context: `[FONTE PDF: ${pdf.fileName} - Pag. ${page.pageNumber}]`,
+          context: `[PDF: ${pdf.fileName} - P. ${page.pageNumber}]`,
           rawText: page.text,
-          source: `${pdf.fileName} (Pag. ${page.pageNumber})`
+          source: `${pdf.fileName} (P. ${page.pageNumber})`
         };
       }
     }
   }
   return { context: "", rawText: "", source: "" };
-};
-
-export const findBestPageForSku = (pdfIndex: ParsedPdf[], sku: string) => {
-  const skuClean = normalizeForSearch(sku);
-  const skuRegex = new RegExp(`(^|[^a-z0-9])${skuClean}([^a-z0-9]|$)`, 'i');
-  
-  for (const pdf of pdfIndex) {
-    for (const page of pdf.pages) {
-      if (skuClean.length > 2 && skuRegex.test(normalizeForSearch(page.text))) {
-        return { fileName: pdf.fileName, pageNumber: page.pageNumber };
-      }
-    }
-  }
-  return null;
-};
-
-export const renderPageToBase64 = async (file: File, pageNumber: number): Promise<string | null> => {
-  try {
-    const arrayBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-    const pdf = await loadingTask.promise;
-    const page = await pdf.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 2.0 }); 
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    if (!context) return null;
-    canvas.height = viewport.height;
-    canvas.width = viewport.width;
-    await page.render({ canvasContext: context, viewport: viewport }).promise;
-    return canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
-  } catch (e) {
-    return null;
-  }
 };
