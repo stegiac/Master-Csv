@@ -8,60 +8,53 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+
+// Trust proxy è fondamentale su Hostinger/Heroku/Vercel
+app.set('trust proxy', 1);
+
 app.use(express.json({ limit: '50mb' }));
 
 const PORT = process.env.PORT || 3000;
-const MODEL_NAME = 'gemini-3-pro-preview';
+const MODEL_NAME = 'gemini-2.0-flash-exp'; // Usiamo un modello stabile e veloce per test
 
-// Middleware per assicurare che le API rispondano sempre in JSON
-app.use('/api', (req, res, next) => {
-  res.setHeader('Content-Type', 'application/json');
+// Middleware per logging richieste
+app.use((req, res, next) => {
+  if (req.url.startsWith('/api')) {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  }
   next();
 });
 
 // Diagnostic Route
 app.get('/api/health', (req, res) => {
+  const key = process.env.API_KEY || process.env.GEMINI_API_KEY;
   res.json({ 
     status: 'online', 
-    apiKeyConfigured: !!process.env.API_KEY,
+    apiKeyConfigured: !!key,
+    envDetected: Object.keys(process.env).filter(k => k.includes('KEY')),
     timestamp: new Date().toISOString()
   });
 });
 
 app.post('/api/gemini', async (req, res) => {
   const { action, payload } = req.body;
-  const requestId = Math.random().toString(36).substring(7);
+  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
 
-  console.log(`[${requestId}] AZIONE: ${action}`);
-
-  if (!process.env.API_KEY) {
-    return res.status(401).json({ success: false, error: "API_KEY mancante nelle variabili d'ambiente di Hostinger." });
+  if (!apiKey) {
+    return res.status(401).json({ success: false, error: "API_KEY non trovata sul server Hostinger." });
   }
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
 
   try {
     if (action === 'process') {
       const { sku, ean, missingFields, pdfContextData, brandName } = payload;
       
-      const systemInstruction = `Sei l'Analista AI Master per E-Commerce Industriale. 
-      Brand obiettivo: ${brandName || 'Sconosciuto'}.
-      COMPITO: Estrai dati tecnici certi per lo SKU fornito.
-      
-      REGOLE:
-      1. PRIORITÀ: Usa il "CONTESTO PDF" fornito.
-      2. NO HALLUCINATION: Se non trovi il dato, rispondi "".
-      3. OUTPUT: SOLO JSON.`;
-
-      const prompt = `ESTRAI DATI PER SKU: ${sku} (EAN: ${ean}).
-      Campi: ${missingFields.map(f => f.name).join(', ')}.
-      CONTESTO PDF: ${pdfContextData?.rawText?.substring(0, 10000) || 'Nessun PDF.'}`;
-
       const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: { parts: [{ text: prompt }] },
-        config: { 
-          systemInstruction,
+        model: 'gemini-3-pro-preview',
+        contents: `Analizza SKU ${sku} (${brandName}). Campi richiesti: ${missingFields.map(f => f.name).join(',')}. Contesto: ${pdfContextData?.rawText?.substring(0, 5000)}`,
+        config: {
+          systemInstruction: "Sei un esperto catalogo. Rispondi solo in JSON validabile.",
           tools: [{ googleSearch: {} }]
         }
       });
@@ -71,31 +64,38 @@ app.post('/api/gemini', async (req, res) => {
 
     if (action === 'explain' || action === 'generateSchema') {
       const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: action === 'explain' 
-          ? `Spiega campo e-commerce "${payload.fieldName}": ${payload.description}`
-          : `Crea schema JSON da header: ${payload.headers.join(', ')}`,
+        model: 'gemini-3-flash-preview',
+        contents: action === 'explain' ? `Spiega ${payload.fieldName}` : `Schema da ${payload.headers}`,
         config: { responseMimeType: "application/json" }
       });
       return res.json({ success: true, data: response.text });
     }
 
-    res.status(400).json({ error: "Azione non valida" });
+    res.status(400).json({ error: "Azione non riconosciuta" });
   } catch (error) {
-    console.error(`[${requestId}] ERRORE:`, error.message);
+    console.error("ERRORE AI:", error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// Fallback per rotte API inesistenti (evita di servire index.html)
+// Serve static files dalla cartella dist
+app.use(express.static(path.join(__dirname, 'dist')));
+
+// Fallback per rotte API non trovate
 app.all('/api/*', (req, res) => {
-  res.status(404).json({ error: `Rotta API ${req.url} non trovata.` });
+  res.status(404).json({ error: `API endpoint ${req.url} not found on this server.` });
 });
 
-// Serving static files
-app.use(express.static(path.join(__dirname, 'dist')));
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'dist', 'index.html')));
+// Tutte le altre rotte caricano l'index.html (Single Page App)
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
 
-app.listen(PORT, () => {
-  console.log(`🚀 Master AI Server attivo sulla porta ${PORT}`);
+// Importante: Ascoltare su '0.0.0.0' per Hostinger
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`-----------------------------------------------`);
+  console.log(`🚀 SERVER MASTER AI AVVIATO`);
+  console.log(`📍 Porta: ${PORT}`);
+  console.log(`🔑 API KEY: ${process.env.API_KEY || process.env.GEMINI_API_KEY ? 'CONFIGURATA ✅' : 'MANCANTE ❌'}`);
+  console.log(`-----------------------------------------------`);
 });

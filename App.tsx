@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Layout, Database, FileInput, Settings, PlayCircle, Activity, AlertCircle } from 'lucide-react';
+import { Layout, Database, FileInput, Settings, PlayCircle, Activity, AlertCircle, ServerCrash } from 'lucide-react';
 import { AppSettings, UploadedFile, SchemaField, FileType, ColumnMapping, DataSourceType } from './types';
 import { DEFAULT_SCHEMA, DEFAULT_TRUSTED_DOMAINS } from './constants';
 import FileImportTab from './components/FileImportTab';
@@ -26,8 +26,8 @@ const App: React.FC = () => {
     const defaultPriority: DataSourceType[] = ['MAPPING', 'MANUFACTURER', 'PDF', 'WEB', 'IMAGE'];
     try {
       const saved = localStorage.getItem('ecom_ai_settings');
-      return saved ? JSON.parse(saved) : { trustedDomains: DEFAULT_TRUSTED_DOMAINS, dataPriority: defaultPriority };
-    } catch(e) { return { trustedDomains: DEFAULT_TRUSTED_DOMAINS, dataPriority: defaultPriority }; }
+      return saved ? JSON.parse(saved) : { trustedDomains: DEFAULT_TRUSTED_DOMAINS, dataPriority: defaultPriority, pipelineVersion: "2.1.0" };
+    } catch(e) { return { trustedDomains: DEFAULT_TRUSTED_DOMAINS, dataPriority: defaultPriority, pipelineVersion: "2.1.0" }; }
   });
 
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>(() => {
@@ -38,18 +38,12 @@ const App: React.FC = () => {
   });
 
   useEffect(() => {
-    localStorage.setItem('ecom_ai_schema', JSON.stringify(schema));
-    localStorage.setItem('ecom_ai_settings', JSON.stringify(settings));
-    localStorage.setItem('ecom_ai_mapping', JSON.stringify(columnMapping));
-  }, [schema, settings, columnMapping]);
-
-  useEffect(() => {
     const verify = async () => {
       const status = await checkApiHealth();
       setApiStatus(status);
     };
     verify();
-    const interval = setInterval(verify, 30000);
+    const interval = setInterval(verify, 15000); // Check più frequente per debug
     return () => clearInterval(interval);
   }, []);
 
@@ -74,32 +68,49 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-20">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-20 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="bg-indigo-600 p-2 rounded-lg"><Database className="text-white w-6 h-6" /></div>
+            <div className="bg-indigo-600 p-2 rounded-lg shadow-indigo-200 shadow-md">
+              <Database className="text-white w-6 h-6" />
+            </div>
             <h1 className="text-xl font-bold text-gray-900 tracking-tight">E-Com Import AI Master</h1>
           </div>
+          
           <div className="flex items-center gap-4">
             {apiStatus && (
-              <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${apiStatus.online ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-                {apiStatus.online ? <Activity size={12} /> : <AlertCircle size={12} />}
-                {apiStatus.online ? (apiStatus.error ? apiStatus.error : 'API Online') : 'API Offline'}
+              <div className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-all ${
+                apiStatus.online && !apiStatus.error 
+                  ? 'bg-emerald-50 text-emerald-600 border-emerald-100' 
+                  : 'bg-red-50 text-red-600 border-red-100 animate-pulse'
+              }`}>
+                {apiStatus.online && !apiStatus.error ? <Activity size={12} /> : <ServerCrash size={12} />}
+                {apiStatus.online ? (apiStatus.error ? apiStatus.error : 'SERVER ONLINE') : (apiStatus.error || 'SERVER OFFLINE')}
               </div>
             )}
-            <div className="text-sm text-gray-500 hidden sm:block">Gemini 3 Pro</div>
+            <div className="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-1 rounded">V {settings.pipelineVersion}</div>
           </div>
         </div>
       </header>
 
       <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
+        {apiStatus?.error && !apiStatus.online && (
+          <div className="mb-6 bg-red-600 text-white p-4 rounded-xl shadow-lg flex items-center gap-4 animate-bounce">
+            <AlertCircle size={24} />
+            <div>
+              <p className="font-bold">ERRORE DI CONNESSIONE AL SERVER</p>
+              <p className="text-xs opacity-90">Il frontend non riesce a parlare con il backend su Hostinger. Dettaglio: {apiStatus.error}</p>
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-col lg:flex-row gap-8">
           <nav className="w-full lg:w-64 flex-shrink-0 space-y-2">
-            <button onClick={() => setActiveTab('import')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors ${activeTab === 'import' ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-600 hover:bg-gray-100'}`}><FileInput size={20} /> Importazione Dati</button>
-            <button onClick={() => setActiveTab('schema')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors ${activeTab === 'schema' ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-600 hover:bg-gray-100'}`}><Layout size={20} /> Schema Export</button>
-            <button onClick={() => setActiveTab('settings')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors ${activeTab === 'settings' ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-600 hover:bg-gray-100'}`}><Settings size={20} /> Priorità Fonti</button>
-            <div className="pt-4 border-t border-gray-200 mt-4">
-              <button onClick={() => setActiveTab('process')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors ${activeTab === 'process' ? 'bg-indigo-600 text-white shadow-md hover:bg-indigo-700' : 'text-gray-600 hover:bg-gray-100'}`}><PlayCircle size={20} /> Elaborazione</button>
+            <button onClick={() => setActiveTab('import')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${activeTab === 'import' ? 'bg-indigo-600 text-white shadow-indigo-100 shadow-lg' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}><FileInput size={20} /> Importazione</button>
+            <button onClick={() => setActiveTab('schema')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${activeTab === 'schema' ? 'bg-indigo-600 text-white shadow-indigo-100 shadow-lg' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}><Layout size={20} /> Schema Export</button>
+            <button onClick={() => setActiveTab('settings')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${activeTab === 'settings' ? 'bg-indigo-600 text-white shadow-indigo-100 shadow-lg' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}><Settings size={20} /> Priorità Fonti</button>
+            <div className="pt-4 border-t border-slate-200 mt-4">
+              <button onClick={() => setActiveTab('process')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-black transition-all ${activeTab === 'process' ? 'bg-emerald-600 text-white shadow-emerald-100 shadow-lg' : 'bg-white text-slate-900 shadow-sm border border-slate-200 hover:border-emerald-300'}`}><PlayCircle size={20} /> AVVIA MOTORE AI</button>
             </div>
           </nav>
 
