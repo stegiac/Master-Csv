@@ -62,13 +62,12 @@ const ProcessingView: React.FC<Props> = ({
         logs: []
       }));
       setProducts(initial as any);
-      addLog(`Rilevati ${initial.length} articoli da elaborare.`, 'info');
+      addLog(`Pronti ${initial.length} SKU per l'elaborazione.`, 'info');
     }
   }, [baseFile, baseSkuColumn, baseEanColumn]);
 
   const hasBlockingErrors = () => {
     return products.some(p => 
-      // Fix: Explicitly cast to SourceInfo[] to fix 'unknown' type error in hasBlockingErrors
       (Object.values(p.sourceMap) as SourceInfo[]).some(audit => 
         audit.warnings?.some(w => w.action === 'block_export')
       )
@@ -78,7 +77,7 @@ const ProcessingView: React.FC<Props> = ({
   const startProcessing = async () => {
     if (isProcessing) return;
     setIsProcessing(true);
-    addLog("Inizio pipeline industriale...", 'info');
+    addLog("Avvio Motore AI Deep Context...", 'info');
 
     let currentParsed = [...parsedPdfs];
     if (pdfFiles.length > 0 && currentParsed.length === 0) {
@@ -89,7 +88,7 @@ const ProcessingView: React.FC<Props> = ({
           try {
             const parsed = await extractTextFromPdf(f.rawFile);
             indexed.push(parsed);
-            addLog(`PDF ${f.name} indicizzato (${parsed.pages.length} pgg).`, 'success');
+            addLog(`PDF Indicizzato: ${f.name}`, 'success');
           } catch(e: any) {
             addLog(`Errore PDF ${f.name}: ${e.message}`, 'error');
           }
@@ -106,7 +105,7 @@ const ProcessingView: React.FC<Props> = ({
       const p = products[i];
       if (p.status === 'completed') { completedCount++; continue; }
 
-      addLog(`[${i+1}/${total}] Elaborazione ${p.sku}...`, 'info');
+      addLog(`Analisi SKU ${p.sku}...`, 'info');
       setCurrentTask(`Articolo ${i+1}/${total}: ${p.sku}`);
       
       setProducts(prev => {
@@ -144,47 +143,49 @@ const ProcessingView: React.FC<Props> = ({
             ...next[i], 
             data: result.values, 
             sourceMap: result.audit, 
-            rawResponse: result.rawResponse,
             status: 'completed' 
           };
           return next;
         });
-        addLog(`Completato: ${p.sku}`, 'success');
+        addLog(`SKU ${p.sku} processato con successo.`, 'success');
 
       } catch (e: any) {
-        addLog(`ERRORE [${p.sku}]: ${e.message}`, 'error');
+        addLog(`ERRORE SKU ${p.sku}: ${e.message}`, 'error');
         setProducts(prev => {
           const next = [...prev];
           next[i] = { ...next[i], status: 'error', error: e.message };
           return next;
         });
-        if (e.message.includes("401") || e.message.includes("TIMEOUT")) break;
+        if (e.message.includes("401") || e.message.includes("TIMEOUT")) {
+          addLog("Pipeline interrotta per errore critico.", 'error');
+          break;
+        }
       }
 
       completedCount++;
       setProgress(Math.round((completedCount / total) * 100));
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 100));
     }
 
     setIsProcessing(false);
-    setCurrentTask("Pipeline terminata.");
+    setCurrentTask("Elaborazione completata.");
   };
 
   const handleExport = () => {
     if (hasBlockingErrors()) {
-      alert("ATTENZIONE: Esportazione bloccata. Sono presenti errori critici di validazione (campi obbligatori mancanti o valori non ammessi). Controlla gli Audit.");
+      alert("IMPOSSIBILE ESPORTARE: Sono presenti errori bloccanti (campi HARD mancanti o violazioni dello schema). Controlla gli alert rossi negli audit.");
       return;
     }
     const data = products.map(p => ({ SKU: p.sku, EAN: p.ean, ...p.data }));
     const sources = products.map(p => {
       const s: any = { SKU: p.sku };
       Object.keys(p.sourceMap).forEach(k => {
-        const info = p.sourceMap[k];
-        s[k] = `[${info.status}] Conf: ${info.confidence} | Fonte: ${info.source}`;
+        const info = p.sourceMap[k] as SourceInfo;
+        s[k] = `[${info.status}] Fonte: ${info.source} (${info.confidence})`;
       });
       return s;
     });
-    generateExcelExport(data, sources, `export_${brandName || 'prodotti'}`);
+    generateExcelExport(data, sources, `export_${brandName || 'import'}`);
   };
 
   return (
@@ -199,14 +200,14 @@ const ProcessingView: React.FC<Props> = ({
         </div>
         <div className="flex gap-2">
           {!isProcessing && (
-            <button onClick={startProcessing} className="bg-indigo-600 text-white px-6 py-2 rounded-lg flex items-center gap-2 hover:bg-indigo-700 font-bold shadow-lg">
-              <Play size={18} /> Avvia
+            <button onClick={startProcessing} className="bg-indigo-600 text-white px-6 py-2 rounded-lg flex items-center gap-2 hover:bg-indigo-700 font-bold shadow-lg transition-all active:scale-95">
+              <Play size={18} /> Avvia Analisi
             </button>
           )}
           {progress > 0 && !isProcessing && (
             <button 
               onClick={handleExport} 
-              className={`${hasBlockingErrors() ? 'bg-gray-400' : 'bg-emerald-600 hover:bg-emerald-700'} text-white px-6 py-2 rounded-lg flex items-center gap-2 font-bold shadow-md transition-colors`}
+              className={`${hasBlockingErrors() ? 'bg-gray-400 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 shadow-lg'} text-white px-6 py-2 rounded-lg flex items-center gap-2 font-bold transition-all`}
             >
               <Download size={18} /> Scarica Excel {hasBlockingErrors() && '(Bloccato)'}
             </button>
@@ -214,43 +215,46 @@ const ProcessingView: React.FC<Props> = ({
         </div>
       </div>
 
-      <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
-        <div className={`h-full transition-all duration-500 ${progress === 100 ? 'bg-emerald-500' : 'bg-indigo-600'}`} style={{ width: `${progress}%` }} />
+      <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden shadow-inner">
+        <div className={`h-full transition-all duration-700 ease-out ${progress === 100 ? 'bg-emerald-500' : 'bg-indigo-600'}`} style={{ width: `${progress}%` }} />
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm flex-grow">
         <div className="overflow-y-auto max-h-[500px]">
           <table className="w-full text-sm text-left">
-            <thead className="bg-gray-50 text-gray-500 uppercase text-[10px] font-bold border-b sticky top-0 z-10">
+            <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold border-b sticky top-0 z-10">
               <tr>
                 <th className="px-6 py-4 w-16 text-center">Stato</th>
-                <th className="px-6 py-4">SKU</th>
+                <th className="px-6 py-4">SKU / Prodotto</th>
                 <th className="px-6 py-4 text-center">Audit</th>
-                <th className="px-6 py-4">Status Elaborazione</th>
+                <th className="px-6 py-4">Dettagli Elaborazione</th>
               </tr>
             </thead>
             <tbody>
               {products.map((p, idx) => {
-                // Fix: Explicitly cast to SourceInfo[] to fix 'unknown' type error for isBlocked check
-                const isBlocked = (Object.values(p.sourceMap) as SourceInfo[]).some(a => a.warnings?.some(w => w.action === 'block_export'));
+                const audits = Object.values(p.sourceMap) as SourceInfo[];
+                const isBlocked = audits.some(a => a.warnings?.some(w => w.action === 'block_export'));
                 return (
-                  <tr key={idx} className={`border-t hover:bg-slate-50 ${isBlocked ? 'bg-red-50/20' : ''}`}>
+                  <tr key={idx} className={`border-t hover:bg-slate-50 transition-colors ${isBlocked ? 'bg-red-50/30' : ''}`}>
                     <td className="px-6 py-4 text-center">
                       {p.status === 'processing' ? <Loader2 className="animate-spin text-indigo-500 mx-auto" size={18} /> : 
                        p.status === 'completed' ? (isBlocked ? <AlertTriangle className="text-amber-500 mx-auto" size={18} /> : <Check className="text-emerald-500 mx-auto" size={18} />) : 
                        p.status === 'error' ? <X className="text-red-500 mx-auto" size={18} /> : <Bookmark className="text-gray-300 mx-auto" size={18} />}
                     </td>
-                    <td className="px-6 py-4 font-mono font-bold text-slate-800">{p.sku}</td>
+                    <td className="px-6 py-4 font-mono font-bold text-slate-800">
+                      {p.sku}
+                      <div className="text-[10px] font-normal text-slate-400">{p.ean}</div>
+                    </td>
                     <td className="px-6 py-4 text-center">
-                      <button onClick={() => setSelectedLogProduct(p)} className="p-2 hover:bg-indigo-50 rounded-full text-indigo-600 inline-block transition-colors">
+                      <button onClick={() => setSelectedLogProduct(p)} className="p-2 hover:bg-indigo-50 rounded-full text-indigo-600 transition-colors border border-transparent hover:border-indigo-100">
                         <ScrollText size={18} />
                       </button>
                     </td>
                     <td className="px-6 py-4">
                       {isBlocked && <span className="text-red-600 font-bold text-[10px] uppercase flex items-center gap-1"><AlertCircle size={10} /> Validazione Fallita</span>}
-                      {p.status === 'completed' && !isBlocked && <span className="text-emerald-600 font-bold text-[10px] uppercase">Pronto</span>}
-                      {p.status === 'processing' && <span className="text-indigo-600 animate-pulse font-bold text-[10px] uppercase">In Corso...</span>}
-                      {p.status === 'error' && <span className="text-red-600 text-[10px]">{p.error}</span>}
+                      {p.status === 'completed' && !isBlocked && <span className="text-emerald-600 font-bold text-[10px] uppercase">Dati Validati</span>}
+                      {p.status === 'processing' && <span className="text-indigo-600 animate-pulse font-bold text-[10px] uppercase flex items-center gap-2"><Zap size={10}/> Interrogazione AI + Search...</span>}
+                      {p.status === 'error' && <span className="text-red-600 text-[10px] font-medium">{p.error}</span>}
                     </td>
                   </tr>
                 );
@@ -260,59 +264,96 @@ const ProcessingView: React.FC<Props> = ({
         </div>
       </div>
 
-      <div className={`bg-slate-900 rounded-xl overflow-hidden border border-slate-700 transition-all ${showTerminal ? 'h-64' : 'h-10'}`}>
-        <div className="bg-slate-800 px-4 py-2 flex justify-between items-center cursor-pointer" onClick={() => setShowTerminal(!showTerminal)}>
-          <span className="text-slate-300 font-mono text-xs flex items-center gap-2"><Terminal size={14} /> CONSOLE LOG SERVER</span>
-          {showTerminal ? <ChevronDown size={14} className="text-slate-500"/> : <ChevronUp size={14} className="text-slate-500"/>}
+      <div className={`bg-slate-900 rounded-xl overflow-hidden border border-slate-700 shadow-xl transition-all ${showTerminal ? 'h-64' : 'h-10'}`}>
+        <div className="bg-slate-800 px-4 py-2 flex justify-between items-center cursor-pointer select-none" onClick={() => setShowTerminal(!showTerminal)}>
+          <span className="text-slate-300 font-mono text-[10px] flex items-center gap-2 font-bold tracking-widest"><Terminal size={14} className="text-indigo-400" /> CONSOLE DIAGNOSTICA SERVER</span>
+          <div className="flex items-center gap-3">
+            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            {showTerminal ? <ChevronDown size={14} className="text-slate-500"/> : <ChevronUp size={14} className="text-slate-500"/>}
+          </div>
         </div>
         <div ref={terminalRef} className="p-4 font-mono text-[10px] overflow-y-auto h-52 text-slate-300 space-y-1">
           {logs.map((log, i) => (
-            <div key={i} className="flex gap-2">
+            <div key={i} className="flex gap-2 border-b border-slate-800/50 pb-1">
               <span className="text-slate-500 shrink-0">[{log.timestamp}]</span>
-              <span className={log.type === 'error' ? 'text-red-400' : log.type === 'success' ? 'text-emerald-400' : log.type === 'ai' ? 'text-indigo-300 italic' : ''}>{log.message}</span>
+              <span className={log.type === 'error' ? 'text-red-400 font-bold' : log.type === 'success' ? 'text-emerald-400' : log.type === 'ai' ? 'text-indigo-300 italic' : ''}>{log.message}</span>
             </div>
           ))}
+          {logs.length === 0 && <div className="text-slate-600 italic">In attesa di attività...</div>}
         </div>
       </div>
 
       {selectedLogProduct && (
-        <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
-            <div className="p-6 border-b flex justify-between items-center">
-              <h4 className="font-bold text-lg">Dettagli Audit: {selectedLogProduct.sku}</h4>
-              <button onClick={() => setSelectedLogProduct(null)} className="p-2 hover:bg-slate-100 rounded-full"><X /></button>
+        <div className="fixed inset-0 bg-slate-950/80 flex items-center justify-center z-50 p-4 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl border border-slate-200">
+            <div className="p-6 border-b flex justify-between items-center bg-slate-50">
+              <div>
+                <h4 className="font-bold text-xl text-slate-900 flex items-center gap-2">
+                  Dettagli Audit: {selectedLogProduct.sku}
+                  <span className="text-[10px] font-normal bg-slate-200 px-2 py-0.5 rounded text-slate-600">{selectedLogProduct.ean}</span>
+                </h4>
+                <p className="text-xs text-slate-500 mt-1">Verifica delle fonti e validazione tecnica dei campi esportati.</p>
+              </div>
+              <button onClick={() => setSelectedLogProduct(null)} className="p-3 hover:bg-red-50 hover:text-red-500 rounded-full transition-all"><X /></button>
             </div>
-            <div className="flex-grow overflow-y-auto p-6 space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="flex-grow overflow-y-auto p-8 space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {schema.map(field => {
-                  const info = selectedLogProduct.sourceMap[field.name];
+                  const info = selectedLogProduct.sourceMap[field.name] as SourceInfo;
                   const value = selectedLogProduct.data[field.name];
-                  const hasError = info?.warnings?.some(w => w.severity === 'error');
+                  const hasBlockingError = info?.warnings?.some(w => w.action === 'block_export');
+                  const hasWarn = info?.warnings?.some(w => w.severity === 'warn');
+                  
                   return (
-                    <div key={field.id} className={`p-4 border rounded-2xl ${hasError ? 'border-red-200 bg-red-50/10' : 'bg-white'}`}>
-                      <div className="text-[9px] font-black text-gray-400 mb-1 uppercase tracking-widest flex justify-between">
-                        {field.name}
-                        {info?.status === 'LOCKED' && <Lock size={10} className="text-indigo-500"/>}
-                        {info?.status === 'STRICT' && <ShieldCheck size={10} className="text-emerald-500"/>}
+                    <div key={field.id} className={`p-5 border-2 rounded-2xl transition-all ${
+                      hasBlockingError ? 'border-red-200 bg-red-50/20 shadow-red-100 shadow-sm' : 
+                      hasWarn ? 'border-amber-200 bg-amber-50/20' : 
+                      'border-slate-100 bg-white hover:border-indigo-100'
+                    }`}>
+                      <div className="text-[9px] font-black text-slate-400 mb-2 uppercase tracking-widest flex justify-between items-center">
+                        <span className="flex items-center gap-1">
+                           {field.name}
+                           {field.fieldClass === 'HARD' && <span className="text-red-400">*</span>}
+                        </span>
+                        {info?.status === 'LOCKED' && <Lock size={12} className="text-indigo-500" title="Dato Certificato Excel"/>}
+                        {info?.status === 'STRICT' && <ShieldCheck size={12} className="text-emerald-500" title="Dato Verificato PDF"/>}
+                        {info?.status === 'EMPTY' && <AlertCircle size={12} className="text-red-500" title="Dato Mancante"/>}
                       </div>
-                      <div className="text-sm font-bold text-slate-800 mb-2">{value || '---'}</div>
+                      <div className="text-sm font-bold text-slate-800 mb-3 bg-slate-50/50 p-2 rounded-lg border border-slate-100/50 min-h-[40px] flex items-center">
+                        {value || <span className="text-slate-300 italic">Mancante</span>}
+                      </div>
                       {info && (
-                        <div className="space-y-1">
-                          <div className="flex justify-between items-center text-[8px]">
-                            <span className="text-gray-500">{info.source}</span>
-                            <span className={`px-1 rounded ${info.confidence === 'high' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>{info.confidence}</span>
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center text-[9px] border-b border-slate-100 pb-1">
+                            <span className="text-slate-500 font-medium truncate max-w-[120px]" title={info.source}>{info.source}</span>
+                            <span className={`px-2 py-0.5 rounded font-bold uppercase ${
+                              info.confidence === 'high' ? 'bg-emerald-100 text-emerald-700' : 
+                              info.confidence === 'medium' ? 'bg-indigo-100 text-indigo-700' : 
+                              'bg-slate-100 text-slate-600'
+                            }`}>{info.confidence}</span>
                           </div>
                           {info.warnings?.map((w, wi) => (
-                            <div key={wi} className={`text-[8px] p-1 rounded font-bold ${w.severity === 'error' ? 'bg-red-600 text-white' : 'bg-amber-100 text-amber-800'}`}>
-                              {w.message}
+                            <div key={wi} className={`text-[9px] p-2 rounded-lg font-bold flex items-start gap-2 ${
+                              w.severity === 'error' ? 'bg-red-600 text-white shadow-md' : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              <AlertCircle size={10} className="mt-0.5 shrink-0" />
+                              <span>{w.message}</span>
                             </div>
                           ))}
+                          {info.url && (
+                            <a href={info.url} target="_blank" rel="noopener noreferrer" className="text-[9px] text-indigo-600 hover:underline flex items-center gap-1 font-bold">
+                              <ExternalLink size={10} /> Vedi Fonte Web
+                            </a>
+                          )}
                         </div>
                       )}
                     </div>
                   );
                 })}
               </div>
+            </div>
+            <div className="p-6 bg-slate-50 border-t flex justify-end">
+               <button onClick={() => setSelectedLogProduct(null)} className="px-8 py-2 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-all">Chiudi Ispezione</button>
             </div>
           </div>
         </div>

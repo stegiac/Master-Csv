@@ -1,17 +1,18 @@
+
 {
   "name": "ecom-import-ai-master",
   "private": true,
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "preinstall": "rm -rf package-lock.json node_modules",
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "vite build",
     "preview": "vite preview",
-    "start": "node server.js"
+    "start": "node server.js",
+    "heroku-postbuild": "npm run build"
   },
   "dependencies": {
-    "@google/genai": "*",
+    "@google/genai": "^1.35.0",
     "express": "^4.18.2",
     "lucide-react": "^0.344.0",
     "pdfjs-dist": "4.8.69",

@@ -7,7 +7,8 @@ const COLOR_MAP: Record<string, string> = {
   'finitura acciaio': 'Acciaio Inox',
   'bianco opaco': 'Bianco',
   'nero goffrato': 'Nero',
-  'cromo': 'Cromato'
+  'cromo': 'Cromato',
+  'titanio': 'Grigio Titanio'
 };
 
 const cleanJson = (text: string) => {
@@ -35,34 +36,36 @@ const standardizeValue = (value: string, field: SchemaField): StandardizedResult
     return { value: "", warnings: [] };
   }
 
-  // 1. IP CLASS DEEP NORMALIZATION
+  // 1. IP CLASS DEEP NORMALIZATION (es: ip-44 -> IP44)
   if (lowerField.includes('ip')) {
     const ipMatch = v.match(/(?:IP)?\s?(\d{2})/i);
     if (ipMatch) res.value = `IP${ipMatch[1]}`;
   }
 
-  // 2. ENERGY LABEL TRANSITION
+  // 2. ENERGY LABEL TRANSITION (A+++ -> A)
   if (lowerField.includes('energetica')) {
     const labelMatch = v.match(/[A-G]/i);
     if (labelMatch) {
       res.value = labelMatch[0].toUpperCase();
       if (v.includes('+')) {
         res.warnings.push({ 
-          message: "Scala obsoleta (A+++), convertita in scala A-G", 
+          message: "Conversione scala obsoleta (A+++ -> A-G)", 
           severity: 'warn' 
         });
       }
     }
   }
 
-  // 3. COMPOSITE DIMENSIONS (LxWxH)
+  // 3. COMPOSITE DIMENSIONS (LxWxH) -> Normalizza tutto in cm
   if (lowerField.includes('altezza') || lowerField.includes('lunghezza') || lowerField.includes('larghezza') || lowerField.includes('misure')) {
     const hasMm = v.toLowerCase().includes('mm');
-    // Trova tutti i numeri (anche decimali) separati da x o *
-    const parts = v.split(/[x*]/i).map(p => parseFloat(p.replace(/[^\d.]/g, '').replace(',', '.')));
+    const numbers = v.split(/[x*]/i).map(p => {
+      const n = parseFloat(p.replace(/[^\d.]/g, '').replace(',', '.'));
+      return isNaN(n) ? null : n;
+    }).filter(n => n !== null) as number[];
     
-    if (parts.length > 0 && !parts.some(isNaN)) {
-      const converted = parts.map(n => hasMm ? (n / 10).toFixed(1) : n.toFixed(1));
+    if (numbers.length > 0) {
+      const converted = numbers.map(n => hasMm ? (n / 10).toFixed(1) : n.toFixed(1));
       res.value = converted.join(' x ') + ' cm';
     }
   }
@@ -78,12 +81,12 @@ const standardizeValue = (value: string, field: SchemaField): StandardizedResult
     }
   }
 
-  // 5. ALLOWED VALUES VALIDATION (BLOCKING)
-  if (field.allowedValues && field.allowedValues.length > 0) {
-    const isValid = field.allowedValues.some(av => v.toLowerCase() === av.toLowerCase());
-    if (!isValid && v !== "") {
+  // 5. ALLOWED VALUES VALIDATION (BLOCKING EXPORT)
+  if (field.allowedValues && field.allowedValues.length > 0 && res.value !== "") {
+    const isValid = field.allowedValues.some(av => res.value.toLowerCase() === av.toLowerCase());
+    if (!isValid) {
       res.warnings.push({
-        message: `Valore "${v}" non ammesso. Valori validi: ${field.allowedValues.join(', ')}`,
+        message: `Valore "${res.value}" non conforme allo schema.`,
         severity: 'error',
         action: 'block_export'
       });
@@ -95,7 +98,7 @@ const standardizeValue = (value: string, field: SchemaField): StandardizedResult
 
 const callGeminiProxy = async (action: string, payload: any) => {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 50000); // 50s totali
+  const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s Timeout
 
   try {
     const response = await fetch('/api/gemini', {
@@ -107,12 +110,12 @@ const callGeminiProxy = async (action: string, payload: any) => {
     
     clearTimeout(timeoutId);
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ error: "Errore di rete" }));
-      throw new Error(err.error || `HTTP ${response.status}`);
+      const err = await response.json();
+      throw new Error(err.error || `Errore Server ${response.status}`);
     }
     return await response.json();
   } catch (e: any) {
-    if (e.name === 'AbortError') throw new Error("TIMEOUT AI: Ricerca web troppo lenta per questo SKU.");
+    if (e.name === 'AbortError') throw new Error("TIMEOUT: L'AI ha impiegato troppo tempo per la ricerca.");
     throw e;
   }
 };
@@ -121,14 +124,14 @@ export const processProductWithGemini = async (params: any): Promise<any> => {
   const finalValues: Record<string, string> = {};
   const finalAudit: Record<string, SourceInfo> = {};
 
-  // Fase 1: Determinismo Excel/Manufacturer
+  // Fase 1: Determinismo Manufacturer/Excel
   params.schema.forEach((field: SchemaField) => {
     let rawVal = params.mappedValues[field.id] || params.manufacturerData?.[field.name];
     if (rawVal) {
       const std = standardizeValue(String(rawVal), field);
       finalValues[field.name] = std.value;
       finalAudit[field.name] = {
-        source: 'Listino Excel Certificato',
+        source: 'Dati Certi (Excel)',
         sourceType: 'MANUFACTURER',
         status: 'LOCKED',
         confidence: 'high',
@@ -139,9 +142,9 @@ export const processProductWithGemini = async (params: any): Promise<any> => {
   });
 
   const missingFields = params.schema.filter((f: SchemaField) => f.enabled && !finalValues[f.name]);
-  if (missingFields.length === 0) return { values: finalValues, audit: finalAudit, rawResponse: "OK: Dati da Excel" };
+  if (missingFields.length === 0) return { values: finalValues, audit: finalAudit, rawResponse: "Excel Completo" };
 
-  // Fase 2: Chiamata AI (PDF + Web)
+  // Fase 2: Chiamata AI con Hardening
   const proxyResult = await callGeminiProxy('process', { ...params, missingFields });
   const aiResult = JSON.parse(cleanJson(proxyResult.data) || '{"values":{},"audit":{}}');
 
@@ -152,15 +155,15 @@ export const processProductWithGemini = async (params: any): Promise<any> => {
     if (aiVal) {
       const std = standardizeValue(String(aiVal), field);
       
-      // Determinazione Status in base alla prova (Evidence)
+      // Determinazione Status STRICT vs ENRICHED
       let status: FieldStatus = 'ENRICHED';
-      if (params.pdfContextData && aiAudit.source?.toLowerCase().includes('pdf')) {
-        status = 'STRICT'; // Trovato con prova nel PDF
+      if (aiAudit.source?.toLowerCase().includes('pdf') || aiAudit.source?.toLowerCase().includes('catalog')) {
+        status = 'STRICT';
       }
 
       finalValues[field.name] = std.value;
       finalAudit[field.name] = {
-        source: aiAudit.source || (proxyResult.grounding ? 'Google Search' : 'AI Reasoning'),
+        source: aiAudit.source || (proxyResult.grounding ? 'Web Search' : 'AI Analysis'),
         sourceType: proxyResult.grounding ? 'WEB' : 'AI',
         status: status,
         confidence: aiAudit.confidence || 'medium',
@@ -169,14 +172,13 @@ export const processProductWithGemini = async (params: any): Promise<any> => {
         pipelineVersion: PIPELINE_VERSION
       };
     } else if (field.fieldClass === 'HARD') {
-      // Campo obbligatorio non trovato
-      finalValues[field.name] = "";
+      // Enforcement HARD: Campo obbligatorio mancante
       finalAudit[field.name] = {
-        source: 'Nessuna fonte affidabile trovata',
+        source: 'Nessuna evidenza trovata',
         sourceType: 'AI',
         status: 'EMPTY',
         confidence: 'low',
-        warnings: [{ message: `Campo ${field.name} richiesto ma non trovato.`, severity: 'error', action: 'block_export' }],
+        warnings: [{ message: "Campo obbligatorio non trovato.", severity: 'error', action: 'block_export' }],
         pipelineVersion: PIPELINE_VERSION
       };
     }
@@ -185,35 +187,21 @@ export const processProductWithGemini = async (params: any): Promise<any> => {
   return { values: finalValues, audit: finalAudit, rawResponse: proxyResult.data };
 };
 
-// Fix: Added missing export generateFieldExplanation for schema explanation logic
 export const generateFieldExplanation = async (field: SchemaField): Promise<string> => {
-  try {
-    const result = await callGeminiProxy('explain', { fieldName: field.name, description: field.description });
-    return result.data;
-  } catch (e) {
-    console.error(e);
-    return "Impossibile generare spiegazione.";
-  }
+  const result = await callGeminiProxy('explain', { fieldName: field.name, description: field.description });
+  return result.data;
 };
 
-// Fix: Added missing export generateSchemaFromHeaders for AI-driven schema generation
 export const generateSchemaFromHeaders = async (headers: string[]): Promise<SchemaField[]> => {
-  try {
-    const result = await callGeminiProxy('generateSchema', { headers });
-    const parsed = JSON.parse(cleanJson(result.data));
-    if (!Array.isArray(parsed)) return [];
-    
-    return parsed.map((f: any, i: number) => ({
-      ...f,
-      id: `ai-${Date.now()}-${i}`,
-      enabled: true,
-      strict: f.fieldClass === 'HARD',
-      fillPolicy: f.fieldClass === 'HARD' ? 'REQUIRED_EVIDENCE' : 'CREATIVE_ONLY',
-      allowedValues: [],
-      isCustom: true
-    }));
-  } catch (e) {
-    console.error(e);
-    return [];
-  }
+  const result = await callGeminiProxy('generateSchema', { headers });
+  const parsed = JSON.parse(cleanJson(result.data));
+  return parsed.map((f: any, i: number) => ({
+    ...f,
+    id: `ai-${Date.now()}-${i}`,
+    enabled: true,
+    strict: f.fieldClass === 'HARD',
+    fillPolicy: f.fieldClass === 'HARD' ? 'REQUIRED_EVIDENCE' : 'ALLOW_INFER',
+    allowedValues: [],
+    isCustom: true
+  }));
 };
