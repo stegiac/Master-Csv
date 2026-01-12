@@ -10,6 +10,14 @@ export default defineConfig(() => {
       outDir: 'dist',
       sourcemap: false
     },
-    // Rimosso define: process.env.API_KEY. La chiave ora vive solo sul server.
+    server: {
+      proxy: {
+        '/api': {
+          target: 'http://localhost:3000',
+          changeOrigin: true,
+          secure: false,
+        }
+      }
+    }
   };
 });

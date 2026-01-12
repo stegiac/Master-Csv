@@ -36,13 +36,13 @@ const standardizeValue = (value: string, field: SchemaField): StandardizedResult
     return { value: "", warnings: [] };
   }
 
-  // 1. IP CLASS DEEP NORMALIZATION (es: ip-44 -> IP44)
+  // 1. IP CLASS DEEP NORMALIZATION
   if (lowerField.includes('ip')) {
     const ipMatch = v.match(/(?:IP)?\s?(\d{2})/i);
     if (ipMatch) res.value = `IP${ipMatch[1]}`;
   }
 
-  // 2. ENERGY LABEL TRANSITION (A+++ -> A)
+  // 2. ENERGY LABEL TRANSITION
   if (lowerField.includes('energetica')) {
     const labelMatch = v.match(/[A-G]/i);
     if (labelMatch) {
@@ -56,7 +56,7 @@ const standardizeValue = (value: string, field: SchemaField): StandardizedResult
     }
   }
 
-  // 3. COMPOSITE DIMENSIONS (LxWxH) -> Normalizza tutto in cm
+  // 3. COMPOSITE DIMENSIONS (LxWxH)
   if (lowerField.includes('altezza') || lowerField.includes('lunghezza') || lowerField.includes('larghezza') || lowerField.includes('misure')) {
     const hasMm = v.toLowerCase().includes('mm');
     const numbers = v.split(/[x*]/i).map(p => {
@@ -81,7 +81,7 @@ const standardizeValue = (value: string, field: SchemaField): StandardizedResult
     }
   }
 
-  // 5. ALLOWED VALUES VALIDATION (BLOCKING EXPORT)
+  // 5. ALLOWED VALUES VALIDATION
   if (field.allowedValues && field.allowedValues.length > 0 && res.value !== "") {
     const isValid = field.allowedValues.some(av => res.value.toLowerCase() === av.toLowerCase());
     if (!isValid) {
@@ -98,7 +98,7 @@ const standardizeValue = (value: string, field: SchemaField): StandardizedResult
 
 const callGeminiProxy = async (action: string, payload: any) => {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s Timeout
+  const timeoutId = setTimeout(() => controller.abort(), 45000);
 
   try {
     const response = await fetch('/api/gemini', {
@@ -109,11 +109,19 @@ const callGeminiProxy = async (action: string, payload: any) => {
     });
     
     clearTimeout(timeoutId);
-    if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.error || `Errore Server ${response.status}`);
+    
+    const contentType = response.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      const text = await response.text();
+      console.error("Risposta non-JSON ricevuta:", text.substring(0, 200));
+      throw new Error(`Il server ha risposto con un errore (HTML invece di JSON). Verifica che il server Node sia attivo e che la API_KEY sia corretta.`);
     }
-    return await response.json();
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || `Errore Server ${response.status}`);
+    }
+    return data;
   } catch (e: any) {
     if (e.name === 'AbortError') throw new Error("TIMEOUT: L'AI ha impiegato troppo tempo per la ricerca.");
     throw e;
@@ -124,7 +132,6 @@ export const processProductWithGemini = async (params: any): Promise<any> => {
   const finalValues: Record<string, string> = {};
   const finalAudit: Record<string, SourceInfo> = {};
 
-  // Fase 1: Determinismo Manufacturer/Excel
   params.schema.forEach((field: SchemaField) => {
     let rawVal = params.mappedValues[field.id] || params.manufacturerData?.[field.name];
     if (rawVal) {
@@ -144,7 +151,6 @@ export const processProductWithGemini = async (params: any): Promise<any> => {
   const missingFields = params.schema.filter((f: SchemaField) => f.enabled && !finalValues[f.name]);
   if (missingFields.length === 0) return { values: finalValues, audit: finalAudit, rawResponse: "Excel Completo" };
 
-  // Fase 2: Chiamata AI con Hardening
   const proxyResult = await callGeminiProxy('process', { ...params, missingFields });
   const aiResult = JSON.parse(cleanJson(proxyResult.data) || '{"values":{},"audit":{}}');
 
@@ -154,8 +160,6 @@ export const processProductWithGemini = async (params: any): Promise<any> => {
 
     if (aiVal) {
       const std = standardizeValue(String(aiVal), field);
-      
-      // Determinazione Status STRICT vs ENRICHED
       let status: FieldStatus = 'ENRICHED';
       if (aiAudit.source?.toLowerCase().includes('pdf') || aiAudit.source?.toLowerCase().includes('catalog')) {
         status = 'STRICT';
@@ -172,7 +176,6 @@ export const processProductWithGemini = async (params: any): Promise<any> => {
         pipelineVersion: PIPELINE_VERSION
       };
     } else if (field.fieldClass === 'HARD') {
-      // Enforcement HARD: Campo obbligatorio mancante
       finalAudit[field.name] = {
         source: 'Nessuna evidenza trovata',
         sourceType: 'AI',
