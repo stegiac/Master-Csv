@@ -2,15 +2,6 @@
 import { SchemaField, DataSourceType, SourceInfo, Warning, FieldStatus, WarningAction } from '../types';
 import { PIPELINE_VERSION } from '../constants';
 
-const COLOR_MAP: Record<string, string> = {
-  'antracite': 'Grigio Scuro',
-  'finitura acciaio': 'Acciaio Inox',
-  'bianco opaco': 'Bianco',
-  'nero goffrato': 'Nero',
-  'cromo': 'Cromato',
-  'titanio': 'Grigio Titanio'
-};
-
 const cleanJson = (text: string) => {
   if (!text) return "{}";
   try {
@@ -22,85 +13,23 @@ const cleanJson = (text: string) => {
   }
 };
 
-interface StandardizedResult {
-  value: string;
-  warnings: Warning[];
-}
-
-const standardizeValue = (value: string, field: SchemaField): StandardizedResult => {
-  let v = String(value).trim();
-  const lowerField = field.name.toLowerCase();
-  const res: StandardizedResult = { value: v, warnings: [] };
-  
-  if (/^(null|n\/d|n\/a|vuoto|nd|nan|none|-$)$/i.test(v)) {
-    return { value: "", warnings: [] };
+export const checkApiHealth = async (): Promise<{online: boolean, error?: string}> => {
+  try {
+    const res = await fetch('/api/health');
+    if (!res.ok) return { online: false, error: `Status ${res.status}` };
+    const data = await res.json();
+    return { online: data.status === 'online', error: data.apiKeyConfigured ? undefined : "API_KEY non configurata sul server" };
+  } catch (e) {
+    return { online: false, error: "Server non raggiungibile" };
   }
-
-  // 1. IP CLASS DEEP NORMALIZATION
-  if (lowerField.includes('ip')) {
-    const ipMatch = v.match(/(?:IP)?\s?(\d{2})/i);
-    if (ipMatch) res.value = `IP${ipMatch[1]}`;
-  }
-
-  // 2. ENERGY LABEL TRANSITION
-  if (lowerField.includes('energetica')) {
-    const labelMatch = v.match(/[A-G]/i);
-    if (labelMatch) {
-      res.value = labelMatch[0].toUpperCase();
-      if (v.includes('+')) {
-        res.warnings.push({ 
-          message: "Conversione scala obsoleta (A+++ -> A-G)", 
-          severity: 'warn' 
-        });
-      }
-    }
-  }
-
-  // 3. COMPOSITE DIMENSIONS (LxWxH)
-  if (lowerField.includes('altezza') || lowerField.includes('lunghezza') || lowerField.includes('larghezza') || lowerField.includes('misure')) {
-    const hasMm = v.toLowerCase().includes('mm');
-    const numbers = v.split(/[x*]/i).map(p => {
-      const n = parseFloat(p.replace(/[^\d.]/g, '').replace(',', '.'));
-      return isNaN(n) ? null : n;
-    }).filter(n => n !== null) as number[];
-    
-    if (numbers.length > 0) {
-      const converted = numbers.map(n => hasMm ? (n / 10).toFixed(1) : n.toFixed(1));
-      res.value = converted.join(' x ') + ' cm';
-    }
-  }
-
-  // 4. COLOR SYNONYMS
-  if (lowerField.includes('colore') || lowerField.includes('finitura')) {
-    const cleanV = v.toLowerCase();
-    for (const [key, mapped] of Object.entries(COLOR_MAP)) {
-      if (cleanV.includes(key)) {
-        res.value = mapped;
-        break;
-      }
-    }
-  }
-
-  // 5. ALLOWED VALUES VALIDATION
-  if (field.allowedValues && field.allowedValues.length > 0 && res.value !== "") {
-    const isValid = field.allowedValues.some(av => res.value.toLowerCase() === av.toLowerCase());
-    if (!isValid) {
-      res.warnings.push({
-        message: `Valore "${res.value}" non conforme allo schema.`,
-        severity: 'error',
-        action: 'block_export'
-      });
-    }
-  }
-
-  return res;
 };
 
 const callGeminiProxy = async (action: string, payload: any) => {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45000);
+  const timeoutId = setTimeout(() => controller.abort(), 50000);
 
   try {
+    // IMPORTANTE: Su Hostinger usa sempre il path relativo per evitare problemi di protocollo http/https
     const response = await fetch('/api/gemini', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -113,17 +42,18 @@ const callGeminiProxy = async (action: string, payload: any) => {
     const contentType = response.headers.get("content-type");
     if (!contentType || !contentType.includes("application/json")) {
       const text = await response.text();
-      console.error("Risposta non-JSON ricevuta:", text.substring(0, 200));
-      throw new Error(`Il server ha risposto con un errore (HTML invece di JSON). Verifica che il server Node sia attivo e che la API_KEY sia corretta.`);
+      const isHtml = text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html');
+      if (isHtml) {
+        throw new Error("Il server ha restituito HTML invece di JSON. Possibile errore di configurazione Hostinger o redirect HTTPS.");
+      }
+      throw new Error("Risposta del server non valida.");
     }
 
     const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || `Errore Server ${response.status}`);
-    }
+    if (!response.ok) throw new Error(data.error || `Errore ${response.status}`);
     return data;
   } catch (e: any) {
-    if (e.name === 'AbortError') throw new Error("TIMEOUT: L'AI ha impiegato troppo tempo per la ricerca.");
+    if (e.name === 'AbortError') throw new Error("TIMEOUT AI (50s)");
     throw e;
   }
 };
@@ -135,76 +65,45 @@ export const processProductWithGemini = async (params: any): Promise<any> => {
   params.schema.forEach((field: SchemaField) => {
     let rawVal = params.mappedValues[field.id] || params.manufacturerData?.[field.name];
     if (rawVal) {
-      const std = standardizeValue(String(rawVal), field);
-      finalValues[field.name] = std.value;
+      finalValues[field.name] = String(rawVal);
       finalAudit[field.name] = {
-        source: 'Dati Certi (Excel)',
-        sourceType: 'MANUFACTURER',
-        status: 'LOCKED',
-        confidence: 'high',
-        warnings: std.warnings,
-        pipelineVersion: PIPELINE_VERSION
+        source: 'Excel', sourceType: 'MANUFACTURER', status: 'LOCKED', confidence: 'high',
+        warnings: [], pipelineVersion: PIPELINE_VERSION
       };
     }
   });
 
   const missingFields = params.schema.filter((f: SchemaField) => f.enabled && !finalValues[f.name]);
-  if (missingFields.length === 0) return { values: finalValues, audit: finalAudit, rawResponse: "Excel Completo" };
+  if (missingFields.length === 0) return { values: finalValues, audit: finalAudit };
 
   const proxyResult = await callGeminiProxy('process', { ...params, missingFields });
   const aiResult = JSON.parse(cleanJson(proxyResult.data) || '{"values":{},"audit":{}}');
 
   missingFields.forEach((field: SchemaField) => {
     const aiVal = aiResult.values?.[field.name];
-    const aiAudit = aiResult.audit?.[field.name] || {};
-
     if (aiVal) {
-      const std = standardizeValue(String(aiVal), field);
-      let status: FieldStatus = 'ENRICHED';
-      if (aiAudit.source?.toLowerCase().includes('pdf') || aiAudit.source?.toLowerCase().includes('catalog')) {
-        status = 'STRICT';
-      }
-
-      finalValues[field.name] = std.value;
+      finalValues[field.name] = String(aiVal);
       finalAudit[field.name] = {
-        source: aiAudit.source || (proxyResult.grounding ? 'Web Search' : 'AI Analysis'),
-        sourceType: proxyResult.grounding ? 'WEB' : 'AI',
-        status: status,
-        confidence: aiAudit.confidence || 'medium',
-        url: aiAudit.url || proxyResult.grounding?.groundingChunks?.[0]?.web?.uri,
-        warnings: std.warnings,
-        pipelineVersion: PIPELINE_VERSION
-      };
-    } else if (field.fieldClass === 'HARD') {
-      finalAudit[field.name] = {
-        source: 'Nessuna evidenza trovata',
-        sourceType: 'AI',
-        status: 'EMPTY',
-        confidence: 'low',
-        warnings: [{ message: "Campo obbligatorio non trovato.", severity: 'error', action: 'block_export' }],
-        pipelineVersion: PIPELINE_VERSION
+        source: aiResult.audit?.[field.name]?.source || "AI",
+        sourceType: 'AI', status: 'ENRICHED', confidence: 'medium',
+        warnings: [], pipelineVersion: PIPELINE_VERSION
       };
     }
   });
 
-  return { values: finalValues, audit: finalAudit, rawResponse: proxyResult.data };
+  return { values: finalValues, audit: finalAudit };
 };
 
 export const generateFieldExplanation = async (field: SchemaField): Promise<string> => {
-  const result = await callGeminiProxy('explain', { fieldName: field.name, description: field.description });
-  return result.data;
+  const res = await callGeminiProxy('explain', { fieldName: field.name, description: field.description });
+  return res.data;
 };
 
 export const generateSchemaFromHeaders = async (headers: string[]): Promise<SchemaField[]> => {
-  const result = await callGeminiProxy('generateSchema', { headers });
-  const parsed = JSON.parse(cleanJson(result.data));
+  const res = await callGeminiProxy('generateSchema', { headers });
+  const parsed = JSON.parse(cleanJson(res.data));
   return parsed.map((f: any, i: number) => ({
-    ...f,
-    id: `ai-${Date.now()}-${i}`,
-    enabled: true,
-    strict: f.fieldClass === 'HARD',
-    fillPolicy: f.fieldClass === 'HARD' ? 'REQUIRED_EVIDENCE' : 'ALLOW_INFER',
-    allowedValues: [],
-    isCustom: true
+    ...f, id: `ai-${Date.now()}-${i}`, enabled: true, strict: f.fieldClass === 'HARD',
+    fillPolicy: 'ALLOW_INFER', allowedValues: [], isCustom: true
   }));
 };
