@@ -40,6 +40,7 @@ const SchemaTab: React.FC<Props> = ({ schema, setSchema }) => {
   };
 
   const handleAdd = () => {
+    // Fix: Added missing properties 'fieldClass' and 'fillPolicy' to satisfy SchemaField interface
     const newField: SchemaField = {
       id: Date.now().toString(),
       name: 'Nuova Colonna',
@@ -47,6 +48,8 @@ const SchemaTab: React.FC<Props> = ({ schema, setSchema }) => {
       prompt: 'Istruzione specifica per l\'AI...',
       enabled: true,
       strict: true,
+      fieldClass: 'HARD',
+      fillPolicy: 'REQUIRED_EVIDENCE',
       allowedValues: [],
       isCustom: true,
       aiExplanation: ''

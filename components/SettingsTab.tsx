@@ -10,20 +10,26 @@ interface Props {
 
 const SettingsTab: React.FC<Props> = ({ settings, setSettings }) => {
   
+  // Added 'AI' property to satisfy Record<DataSourceType, string> as defined in types.ts
   const priorityLabels: Record<DataSourceType, string> = {
     'MAPPING': 'Mappatura Diretta (Forzata)',
     'MANUFACTURER': 'File Excel Produttore',
     'PDF': 'Cataloghi PDF',
     'WEB': 'Ricerca Web (Google)',
-    'IMAGE': 'Analisi Visiva (Foto)'
+    'IMAGE': 'Analisi Visiva (Foto)',
+    'DERIVED': 'Dati Derivati (Calcoli/Logica)',
+    'AI': 'Generazione AI (Pura)'
   };
 
+  // Added 'AI' property to satisfy Record<DataSourceType, string> as defined in types.ts
   const priorityDescriptions: Record<DataSourceType, string> = {
     'MAPPING': 'Valori mappati manualmente dall\'utente. Massima priorità, sovrascrive tutto.',
     'MANUFACTURER': 'Dati tecnici presenti nel file Excel fornito dal produttore.',
     'PDF': 'Specifiche tecniche estratte dalla lettura dei file PDF caricati.',
     'WEB': 'Dati trovati online (sito ufficiale, e-commerce, schede tecniche).',
-    'IMAGE': 'Attributi estetici (colore, forma, materiali) dedotti dalla foto.'
+    'IMAGE': 'Attributi estetici (colore, forma, materiali) dedotti dalla foto.',
+    'DERIVED': 'Informazioni generate combinando o trasformando altri attributi del prodotto.',
+    'AI': 'Informazioni generate interamente dal modello linguistico senza riferimenti esterni diretti.'
   };
 
   const moveItem = (index: number, direction: 'up' | 'down') => {

@@ -1,46 +1,58 @@
 
+export type DataSourceType = 'MAPPING' | 'MANUFACTURER' | 'PDF' | 'WEB' | 'IMAGE' | 'DERIVED' | 'AI';
+export type FieldClass = 'HARD' | 'SOFT';
+export type FillPolicy = 'REQUIRED_EVIDENCE' | 'ALLOW_INFER' | 'CREATIVE_ONLY';
+export type FieldStatus = 'LOCKED' | 'STRICT' | 'ENRICHED' | 'EMPTY';
+export type Severity = 'info' | 'warn' | 'error';
+export type WarningAction = 'none' | 'review' | 'block_export';
+
+export interface Warning {
+  message: string;
+  severity: Severity;
+  action?: WarningAction;
+}
+
 export interface SchemaField {
   id: string;
-  name: string; // Column Header in Export
-  description: string; // What this field contains
-  prompt: string; // Specific instruction to AI for this field
+  name: string;
+  description: string;
+  prompt: string;
   enabled: boolean;
-  strict: boolean; // true = Extract only, false = AI can articulate/generate
-  allowedValues: string[]; // If not empty, restrict output to these values
-  isCustom?: boolean; // Flag to identify user-added fields
-  aiExplanation?: string; // Auto-generated user-friendly explanation
+  strict: boolean; 
+  fieldClass: FieldClass;
+  fillPolicy: FillPolicy;
+  allowedValues: string[];
+  isCustom?: boolean;
+  aiExplanation?: string;
 }
 
-export interface ProcessLog {
-  timestamp: string;
-  message: string;
-  type: 'info' | 'success' | 'warning' | 'error';
-}
-
-export interface PdfExtractedData {
-  sku: string;
-  data: Record<string, string>; // Technical specs found in PDF
-  visuals: Record<string, string>; // Visual attributes from images in PDF
-  sourcePage?: string;
+export interface SourceInfo {
+  source: string;
+  sourceType: DataSourceType;
+  confidence: 'high' | 'medium' | 'low';
+  evidence?: string;
+  evidencePointer?: string;
+  url?: string;
+  status: FieldStatus;
+  warnings: Warning[];
+  pipelineVersion: string;
 }
 
 export interface ProcessedProduct {
   sku: string;
   ean: string;
   status: 'pending' | 'processing' | 'completed' | 'error';
-  data: Record<string, string>; // Key is SchemaField.name, Value is result
-  sourceMap?: Record<string, string>; // Key is SchemaField.name, Value is the source (e.g. "PDF", "Web", "Manu Desc")
-  rawResponse?: string; // The full raw text response from AI for debugging
+  data: Record<string, string>;
+  sourceMap: Record<string, SourceInfo>;
+  rawResponse?: string;
   error?: string;
-  logs: ProcessLog[]; // History of processing steps
-  pdfContextData?: PdfExtractedData; // Data extracted during PDF Batch Analysis
+  logs: any[];
 }
-
-export type DataSourceType = 'MAPPING' | 'MANUFACTURER' | 'PDF' | 'WEB' | 'IMAGE';
 
 export interface AppSettings {
   trustedDomains: string[];
-  dataPriority: DataSourceType[]; // Ordered list of priorities
+  dataPriority: DataSourceType[];
+  pipelineVersion: string;
 }
 
 export enum FileType {
