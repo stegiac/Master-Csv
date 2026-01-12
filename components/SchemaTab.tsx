@@ -1,9 +1,10 @@
 
 import React, { useState } from 'react';
-import { Plus, Trash2, Edit2, Save, AlertCircle, Lock, Sparkles, RefreshCw, Check, Tag, Loader2, Lightbulb, ShieldAlert, ArrowUp, ArrowDown, Download } from 'lucide-react';
+import { Plus, Trash2, Edit2, Save, AlertCircle, Lock, Sparkles, RefreshCw, Check, Tag, Loader2, Lightbulb, ShieldAlert, ArrowUp, ArrowDown, Download, Upload, FileSpreadsheet } from 'lucide-react';
 import { SchemaField } from '../types';
 import { DEFAULT_SCHEMA } from '../constants';
-import { generateFieldExplanation } from '../services/geminiService';
+import { generateFieldExplanation, generateSchemaFromHeaders } from '../services/geminiService';
+import { readExcelHeaders } from '../services/excelService';
 
 interface Props {
   schema: SchemaField[];
@@ -15,6 +16,7 @@ const SchemaTab: React.FC<Props> = ({ schema, setSchema }) => {
   const [tempField, setTempField] = useState<SchemaField | null>(null);
   const [rawValuesInput, setRawValuesInput] = useState(''); // Local state for smooth textarea editing
   const [isGeneratingExpl, setIsGeneratingExpl] = useState(false);
+  const [isImportingTemplate, setIsImportingTemplate] = useState(false);
 
   const handleEdit = (field: SchemaField) => {
     setEditingId(field.id);
@@ -69,6 +71,42 @@ const SchemaTab: React.FC<Props> = ({ schema, setSchema }) => {
     downloadAnchorNode.remove();
   };
 
+  const handleImportTemplate = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const file = e.target.files[0];
+      if (!confirm(`Vuoi importare le intestazioni dal file "${file.name}"? \nATTENZIONE: Questo SOVRASCRIVERÀ lo schema attuale.`)) {
+         return;
+      }
+      
+      setIsImportingTemplate(true);
+      try {
+        // 1. Leggi le intestazioni
+        const headers = await readExcelHeaders(file);
+        if (headers.length === 0) {
+            alert("Impossibile trovare intestazioni nel file. Assicurati che la prima riga contenga i nomi delle colonne.");
+            setIsImportingTemplate(false);
+            return;
+        }
+
+        // 2. Genera schema con AI
+        const newSchema = await generateSchemaFromHeaders(headers);
+        if (newSchema.length > 0) {
+            setSchema(newSchema);
+            alert(`Schema generato con successo! ${newSchema.length} campi configurati.`);
+        } else {
+            alert("Errore nella generazione dello schema. Riprova.");
+        }
+      } catch (err) {
+        console.error(err);
+        alert("Errore durante l'importazione del template.");
+      } finally {
+        setIsImportingTemplate(false);
+        // Reset input value to allow re-uploading same file if needed
+        e.target.value = '';
+      }
+    }
+  };
+
   const moveField = (index: number, direction: 'up' | 'down') => {
     const newSchema = [...schema];
     if (direction === 'up') {
@@ -99,7 +137,7 @@ const SchemaTab: React.FC<Props> = ({ schema, setSchema }) => {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-4 rounded-xl border border-gray-200 shadow-sm gap-4">
         <div>
           <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
             Configurazione Export
@@ -107,21 +145,27 @@ const SchemaTab: React.FC<Props> = ({ schema, setSchema }) => {
               <Check size={10} /> Salvataggio Autom
             </span>
           </h3>
-          <p className="text-sm text-gray-500">Definisci colonne, prompt e regole di validazione.</p>
+          <p className="text-sm text-gray-500">Definisci le colonne del file Excel finale che verrà creato.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+           <label className={`flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded-lg transition-colors text-sm shadow-sm cursor-pointer ${isImportingTemplate ? 'opacity-70 cursor-wait' : ''}`}>
+             {isImportingTemplate ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
+             <span>{isImportingTemplate ? 'Analisi AI...' : 'Importa Template Excel'}</span>
+             <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleImportTemplate} disabled={isImportingTemplate} />
+           </label>
+
            <button 
             onClick={handleExportSchema}
             className="flex items-center gap-2 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-3 py-2 rounded-lg transition-colors text-sm shadow-sm"
             title="Scarica configurazione JSON"
           >
-            <Download size={16} /> Esporta JSON
+            <Download size={16} /> JSON
           </button>
           <button 
             onClick={handleReset}
             className="flex items-center gap-2 text-gray-500 hover:text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors text-sm"
           >
-            <RefreshCw size={16} /> Ripristina Default
+            <RefreshCw size={16} /> Reset
           </button>
           <button 
             onClick={handleAdd}

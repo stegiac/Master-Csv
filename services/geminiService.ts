@@ -409,3 +409,69 @@ export const generateFieldExplanation = async (field: SchemaField): Promise<stri
     return "";
   }
 };
+
+export const generateSchemaFromHeaders = async (headers: string[]): Promise<SchemaField[]> => {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) throw new Error("API Key not found");
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  const systemInstruction = `
+    Sei un esperto di configurazione E-commerce (PrestaShop, WooCommerce, Shopify, Magento).
+    
+    OBIETTIVO:
+    Riceverai una lista di intestazioni di colonna (Headers) provenienti da un file di importazione.
+    Per ogni intestazione, devi generare un oggetto JSON che configuri come l'AI deve estrarre quel dato.
+
+    PARAMETRI PER OGNI CAMPO:
+    - id: genera un ID univoco stringa.
+    - name: Il nome esatto dell'intestazione (non cambiarlo).
+    - description: Una breve descrizione di cosa contiene (es. "Peso in kg", "Descrizione HTML").
+    - prompt: Un'istruzione chiara per l'AI che dovrà estrarre il dato (es. "Estrai il peso netto numerico. Se non lo trovi, lascia vuoto.").
+    - strict: true se è un dato tecnico (Dimensioni, EAN, Codici, Numeri), false se è creativo (Titoli, Descrizioni).
+    - allowedValues: array di stringhe se il campo accetta solo valori specifici (es. "SI", "NO" o "Pubblicato", "Bozza"), altrimenti array vuoto.
+
+    FORMATO OUTPUT:
+    Restituisci ESCLUSIVAMENTE un array JSON di oggetti SchemaField.
+    
+    Esempio Input: ["product_name", "weight_kg", "active"]
+    Esempio Output:
+    [
+      { "id": "1", "name": "product_name", "description": "Nome del prodotto", "prompt": "Genera un titolo prodotto ottimizzato", "strict": false, "allowedValues": [] },
+      { "id": "2", "name": "weight_kg", "description": "Peso in Kg", "prompt": "Estrai solo il valore numerico del peso", "strict": true, "allowedValues": [] },
+      { "id": "3", "name": "active", "description": "Stato pubblicazione", "prompt": "1 per attivo, 0 per inattivo", "strict": true, "allowedValues": ["1", "0"] }
+    ]
+  `;
+
+  const prompt = `Analizza queste intestazioni di colonne e crea lo schema: ${JSON.stringify(headers)}`;
+
+  try {
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: { parts: [{ text: prompt }] },
+        config: { systemInstruction }
+    });
+
+    let text = response.text || "";
+    // Cleanup JSON markdown
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+        text = jsonMatch[0];
+    }
+    text = text.replace(/```json/g, '').replace(/```/g, '');
+
+    const fields = JSON.parse(text);
+    // Ensure "enabled" and "isCustom" are set correctly
+    return fields.map((f: any, idx: number) => ({
+        ...f,
+        id: Date.now().toString() + idx,
+        enabled: true,
+        isCustom: true,
+        aiExplanation: f.description // Default explanation
+    }));
+
+  } catch (error) {
+    console.error("Error generating schema from headers:", error);
+    return [];
+  }
+};
