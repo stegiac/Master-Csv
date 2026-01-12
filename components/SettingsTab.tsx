@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { ShieldCheck, ArrowUp, ArrowDown, Layers } from 'lucide-react';
+import { ShieldCheck, ArrowUp, ArrowDown, Layers, Eye, EyeOff } from 'lucide-react';
 import { AppSettings, DataSourceType } from '../types';
 
 interface Props {
@@ -10,7 +10,6 @@ interface Props {
 
 const SettingsTab: React.FC<Props> = ({ settings, setSettings }) => {
   
-  // Added 'AI' property to satisfy Record<DataSourceType, string> as defined in types.ts
   const priorityLabels: Record<DataSourceType, string> = {
     'MAPPING': 'Mappatura Diretta (Forzata)',
     'MANUFACTURER': 'File Excel Produttore',
@@ -21,7 +20,6 @@ const SettingsTab: React.FC<Props> = ({ settings, setSettings }) => {
     'AI': 'Generazione AI (Pura)'
   };
 
-  // Added 'AI' property to satisfy Record<DataSourceType, string> as defined in types.ts
   const priorityDescriptions: Record<DataSourceType, string> = {
     'MAPPING': 'Valori mappati manualmente dall\'utente. Massima priorità, sovrascrive tutto.',
     'MANUFACTURER': 'Dati tecnici presenti nel file Excel fornito dal produttore.',
@@ -44,6 +42,15 @@ const SettingsTab: React.FC<Props> = ({ settings, setSettings }) => {
     setSettings({ ...settings, dataPriority: newOrder });
   };
 
+  const toggleSource = (type: DataSourceType) => {
+    const isDisabled = settings.disabledSources.includes(type);
+    const newDisabled = isDisabled 
+      ? settings.disabledSources.filter(s => s !== type)
+      : [...settings.disabledSources, type];
+    
+    setSettings({ ...settings, disabledSources: newDisabled });
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       
@@ -54,48 +61,67 @@ const SettingsTab: React.FC<Props> = ({ settings, setSettings }) => {
           </div>
           <div>
             <h3 className="text-lg font-bold text-gray-800">Gerarchia Fonti Dati</h3>
-            <p className="text-sm text-gray-500">Definisci l'ordine di importanza delle fonti. L'AI userà i dati della fonte più in alto se disponibili.</p>
+            <p className="text-sm text-gray-500">L'AI userà i dati della fonte attiva più in alto. Disabilita le fonti che non vuoi usare.</p>
           </div>
         </div>
 
         <div className="mt-6 space-y-3">
-          {settings.dataPriority.map((type, index) => (
-            <div key={type} className="flex items-center gap-4 bg-gray-50 p-4 rounded-lg border border-gray-200 transition-all hover:shadow-md hover:border-indigo-200 group">
-              <div className="font-mono text-2xl font-bold text-gray-300 w-8 text-center">
-                {index + 1}
-              </div>
-              
-              <div className="flex-grow">
-                <h4 className="font-bold text-gray-800 text-sm md:text-base">{priorityLabels[type]}</h4>
-                <p className="text-xs text-gray-500 hidden md:block">{priorityDescriptions[type]}</p>
-              </div>
+          {settings.dataPriority.map((type, index) => {
+            const isDisabled = settings.disabledSources.includes(type);
+            return (
+              <div key={type} className={`flex items-center gap-4 p-4 rounded-lg border transition-all group ${isDisabled ? 'bg-gray-100 border-gray-200 opacity-60' : 'bg-white border-gray-200 hover:shadow-md hover:border-indigo-200'}`}>
+                <div className={`font-mono text-2xl font-bold w-8 text-center ${isDisabled ? 'text-gray-300' : 'text-indigo-200'}`}>
+                  {index + 1}
+                </div>
+                
+                <div className="flex-grow">
+                  <div className="flex items-center gap-2">
+                    <h4 className={`font-bold text-sm md:text-base ${isDisabled ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
+                      {priorityLabels[type]}
+                    </h4>
+                    {isDisabled && <span className="text-[9px] bg-gray-200 text-gray-500 px-1.5 rounded uppercase font-bold tracking-tighter">Disabilitata</span>}
+                  </div>
+                  <p className="text-xs text-gray-400 hidden md:block">{priorityDescriptions[type]}</p>
+                </div>
 
-              <div className="flex flex-col gap-1">
-                 <button 
-                   onClick={() => moveItem(index, 'up')}
-                   disabled={index === 0}
-                   className={`p-1 rounded hover:bg-indigo-100 hover:text-indigo-600 transition-colors ${index === 0 ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400'}`}
-                 >
-                   <ArrowUp size={18} />
-                 </button>
-                 <button 
-                   onClick={() => moveItem(index, 'down')}
-                   disabled={index === settings.dataPriority.length - 1}
-                   className={`p-1 rounded hover:bg-indigo-100 hover:text-indigo-600 transition-colors ${index === settings.dataPriority.length - 1 ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400'}`}
-                 >
-                   <ArrowDown size={18} />
-                 </button>
+                <div className="flex items-center gap-2">
+                   {/* Toggle Button */}
+                   <button 
+                     onClick={() => toggleSource(type)}
+                     className={`p-2 rounded-lg transition-colors ${isDisabled ? 'bg-gray-200 text-gray-500' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'}`}
+                     title={isDisabled ? "Abilita Fonte" : "Disabilita Fonte"}
+                   >
+                     {isDisabled ? <EyeOff size={18} /> : <Eye size={18} />}
+                   </button>
+
+                   <div className="flex flex-col gap-0.5 border-l border-gray-200 pl-2 ml-1">
+                     <button 
+                       onClick={() => moveItem(index, 'up')}
+                       disabled={index === 0}
+                       className={`p-1 rounded hover:bg-indigo-50 hover:text-indigo-600 transition-colors ${index === 0 ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400'}`}
+                     >
+                       <ArrowUp size={16} />
+                     </button>
+                     <button 
+                       onClick={() => moveItem(index, 'down')}
+                       disabled={index === settings.dataPriority.length - 1}
+                       className={`p-1 rounded hover:bg-indigo-50 hover:text-indigo-600 transition-colors ${index === settings.dataPriority.length - 1 ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400'}`}
+                     >
+                       <ArrowDown size={16} />
+                     </button>
+                   </div>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
       
       <div className="bg-blue-50 p-4 rounded-lg border border-blue-100 text-blue-800 text-sm flex items-start gap-3">
         <ShieldCheck className="flex-shrink-0 mt-0.5" size={18} />
         <p>
-          <strong>Nota:</strong> La "Mappatura Diretta" e il "File Produttore" sono generalmente i dati più affidabili. 
-          Si consiglia di mantenerli in cima alla lista per evitare che l'AI sovrascriva dati certi con informazioni trovate sul web.
+          <strong>Consiglio:</strong> Se vuoi evitare ricerche web lunghe, clicca sull'icona dell'occhio accanto a <strong>Ricerca Web (Google)</strong>. 
+          L'AI si limiterà a leggere i tuoi file PDF e il foglio Excel del produttore.
         </p>
       </div>
 
@@ -103,4 +129,5 @@ const SettingsTab: React.FC<Props> = ({ settings, setSettings }) => {
   );
 };
 
+// Fixed: Added default export for the SettingsTab component
 export default SettingsTab;

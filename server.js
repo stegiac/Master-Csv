@@ -8,94 +8,94 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-
-// Trust proxy è fondamentale su Hostinger/Heroku/Vercel
 app.set('trust proxy', 1);
-
 app.use(express.json({ limit: '50mb' }));
 
 const PORT = process.env.PORT || 3000;
-const MODEL_NAME = 'gemini-2.0-flash-exp'; // Usiamo un modello stabile e veloce per test
 
-// Middleware per logging richieste
-app.use((req, res, next) => {
-  if (req.url.startsWith('/api')) {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
-  }
-  next();
-});
-
-// Diagnostic Route
+// HEALTH CHECK - Spostato in alto per massima priorità
 app.get('/api/health', (req, res) => {
-  const key = process.env.API_KEY || process.env.GEMINI_API_KEY;
+  // Fixed: Always use process.env.API_KEY exclusively
+  const key = process.env.API_KEY;
+  res.setHeader('Content-Type', 'application/json');
   res.json({ 
     status: 'online', 
     apiKeyConfigured: !!key,
-    envDetected: Object.keys(process.env).filter(k => k.includes('KEY')),
     timestamp: new Date().toISOString()
   });
 });
 
 app.post('/api/gemini', async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
   const { action, payload } = req.body;
-  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-
-  if (!apiKey) {
-    return res.status(401).json({ success: false, error: "API_KEY non trovata sul server Hostinger." });
+  
+  // Fixed: Ensure API key is present exclusively from process.env.API_KEY
+  if (!process.env.API_KEY) {
+    return res.status(401).json({ success: false, error: "API_KEY non configurata." });
   }
 
-  const ai = new GoogleGenAI({ apiKey });
-
   try {
+    // Fixed: Initialize GoogleGenAI right before use with direct env access
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
     if (action === 'process') {
       const { sku, ean, missingFields, pdfContextData, brandName } = payload;
-      
       const response = await ai.models.generateContent({
         model: 'gemini-3-pro-preview',
-        contents: `Analizza SKU ${sku} (${brandName}). Campi richiesti: ${missingFields.map(f => f.name).join(',')}. Contesto: ${pdfContextData?.rawText?.substring(0, 5000)}`,
+        contents: `Analizza SKU ${sku} (${brandName}). Campi: ${missingFields.map(f => f.name).join(',')}. Contesto: ${pdfContextData?.rawText?.substring(0, 8000)}`,
         config: {
-          systemInstruction: "Sei un esperto catalogo. Rispondi solo in JSON validabile.",
+          systemInstruction: "Sei un analista tecnico e-commerce. Estrai solo dati certi. Rispondi in JSON.",
           tools: [{ googleSearch: {} }]
         }
       });
-
+      // Fixed: Access .text as a property, not a method
       return res.json({ success: true, data: response.text });
     }
 
-    if (action === 'explain' || action === 'generateSchema') {
+    // Fixed: Implemented 'explain' action required by the frontend
+    if (action === 'explain') {
+      const { fieldName, description } = payload;
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: action === 'explain' ? `Spiega ${payload.fieldName}` : `Schema da ${payload.headers}`,
-        config: { responseMimeType: "application/json" }
+        contents: `Spiega il significato del campo e-commerce "${fieldName}" (${description}) a un utente finale in una frase semplice.`,
       });
       return res.json({ success: true, data: response.text });
     }
 
-    res.status(400).json({ error: "Azione non riconosciuta" });
+    // Fixed: Implemented 'generateSchema' action required by the frontend
+    if (action === 'generateSchema') {
+      const { headers } = payload;
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-pro-preview',
+        contents: `Analizza queste intestazioni Excel: ${headers.join(', ')}. Genera uno schema JSON di mappatura.`,
+        config: {
+          systemInstruction: "Genera un array JSON di oggetti con {name, description, prompt, fieldClass}. fieldClass deve essere 'HARD' per dati tecnici esatti o 'SOFT' per campi descrittivi.",
+          responseMimeType: "application/json"
+        }
+      });
+      return res.json({ success: true, data: response.text });
+    }
+    
+    res.status(400).json({ error: "Azione non valida" });
   } catch (error) {
-    console.error("ERRORE AI:", error.message);
+    console.error("API ERROR:", error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// Serve static files dalla cartella dist
+// STATIC FILES
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Fallback per rotte API non trovate
-app.all('/api/*', (req, res) => {
-  res.status(404).json({ error: `API endpoint ${req.url} not found on this server.` });
-});
-
-// Tutte le altre rotte caricano l'index.html (Single Page App)
+// SPA FALLBACK
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+  // Se la richiesta inizia con /api ma non è stata gestita, restituisci 404 JSON, non HTML
+  if (req.url.startsWith('/api')) {
+    res.status(404).json({ error: `Rotta API ${req.url} non trovata.` });
+  } else {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+  }
 });
 
-// Importante: Ascoltare su '0.0.0.0' per Hostinger
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`-----------------------------------------------`);
-  console.log(`🚀 SERVER MASTER AI AVVIATO`);
-  console.log(`📍 Porta: ${PORT}`);
-  console.log(`🔑 API KEY: ${process.env.API_KEY || process.env.GEMINI_API_KEY ? 'CONFIGURATA ✅' : 'MANCANTE ❌'}`);
-  console.log(`-----------------------------------------------`);
+  console.log(`🚀 Server attivo su porta ${PORT}`);
 });

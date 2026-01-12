@@ -26,8 +26,12 @@ const App: React.FC = () => {
     const defaultPriority: DataSourceType[] = ['MAPPING', 'MANUFACTURER', 'PDF', 'WEB', 'IMAGE'];
     try {
       const saved = localStorage.getItem('ecom_ai_settings');
-      return saved ? JSON.parse(saved) : { trustedDomains: DEFAULT_TRUSTED_DOMAINS, dataPriority: defaultPriority, pipelineVersion: "2.1.0" };
-    } catch(e) { return { trustedDomains: DEFAULT_TRUSTED_DOMAINS, dataPriority: defaultPriority, pipelineVersion: "2.1.0" }; }
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return { ...parsed, disabledSources: parsed.disabledSources || [] };
+      }
+      return { trustedDomains: DEFAULT_TRUSTED_DOMAINS, dataPriority: defaultPriority, disabledSources: [], pipelineVersion: "2.1.0" };
+    } catch(e) { return { trustedDomains: DEFAULT_TRUSTED_DOMAINS, dataPriority: defaultPriority, disabledSources: [], pipelineVersion: "2.1.0" }; }
   });
 
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>(() => {
@@ -38,12 +42,18 @@ const App: React.FC = () => {
   });
 
   useEffect(() => {
+    localStorage.setItem('ecom_ai_schema', JSON.stringify(schema));
+    localStorage.setItem('ecom_ai_settings', JSON.stringify(settings));
+    localStorage.setItem('ecom_ai_mapping', JSON.stringify(columnMapping));
+  }, [schema, settings, columnMapping]);
+
+  useEffect(() => {
     const verify = async () => {
       const status = await checkApiHealth();
       setApiStatus(status);
     };
     verify();
-    const interval = setInterval(verify, 15000); // Check più frequente per debug
+    const interval = setInterval(verify, 10000); 
     return () => clearInterval(interval);
   }, []);
 
@@ -95,11 +105,11 @@ const App: React.FC = () => {
 
       <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
         {apiStatus?.error && !apiStatus.online && (
-          <div className="mb-6 bg-red-600 text-white p-4 rounded-xl shadow-lg flex items-center gap-4 animate-bounce">
+          <div className="mb-6 bg-red-600 text-white p-4 rounded-xl shadow-lg flex items-center gap-4 border-2 border-red-400">
             <AlertCircle size={24} />
             <div>
-              <p className="font-bold">ERRORE DI CONNESSIONE AL SERVER</p>
-              <p className="text-xs opacity-90">Il frontend non riesce a parlare con il backend su Hostinger. Dettaglio: {apiStatus.error}</p>
+              <p className="font-bold">ERRORE DI CONNESSIONE AL SERVER (404/NOT FOUND)</p>
+              <p className="text-xs opacity-90">Hostinger non sta eseguendo il file server.js. Verifica che il "Startup File" nel pannello Node.js sia impostato su "server.js".</p>
             </div>
           </div>
         )}

@@ -79,8 +79,15 @@ const ProcessingView: React.FC<Props> = ({
     setIsProcessing(true);
     addLog("Avvio Motore AI Deep Context...", 'info');
 
+    // Filtra le fonti disabilitate dalla priorità
+    const activeDataPriority = settings.dataPriority.filter(
+      source => !settings.disabledSources.includes(source)
+    );
+    
+    addLog(`Fonti Attive: ${activeDataPriority.join(', ')}`, 'info');
+
     let currentParsed = [...parsedPdfs];
-    if (pdfFiles.length > 0 && currentParsed.length === 0) {
+    if (pdfFiles.length > 0 && currentParsed.length === 0 && activeDataPriority.includes('PDF')) {
       setCurrentTask("Indicizzazione cataloghi PDF...");
       const indexed: ParsedPdf[] = [];
       for(let f of pdfFiles) {
@@ -115,11 +122,14 @@ const ProcessingView: React.FC<Props> = ({
       });
 
       try {
-        const pdfContext = findRelevantPdfContext(currentParsed, p.sku, p.ean);
+        const pdfContext = activeDataPriority.includes('PDF') 
+          ? findRelevantPdfContext(currentParsed, p.sku, p.ean)
+          : { rawText: "" };
+
         const mappedValues: Record<string, any> = {};
         let manuData = null;
 
-        if (manuFile) {
+        if (manuFile && activeDataPriority.includes('MANUFACTURER')) {
           manuData = manuFile.data.find((row: any) => String(row[manuSkuColumn]) === p.sku);
           if (manuData) {
             schema.forEach(field => {
@@ -134,7 +144,8 @@ const ProcessingView: React.FC<Props> = ({
           manufacturerData: manuData,
           pdfContextData: pdfContext.rawText ? { sku: p.sku, rawText: pdfContext.rawText } : undefined,
           mappedValues,
-          trustedDomains: settings.trustedDomains
+          trustedDomains: settings.trustedDomains,
+          dataPriority: activeDataPriority // Passiamo solo le fonti attive
         });
 
         setProducts(prev => {
@@ -173,7 +184,7 @@ const ProcessingView: React.FC<Props> = ({
 
   const handleExport = () => {
     if (hasBlockingErrors()) {
-      alert("IMPOSSIBILE ESPORTARE: Sono presenti errori bloccanti (campi HARD mancanti o violazioni dello schema). Controlla gli alert rossi negli audit.");
+      alert("IMPOSSIBILE ESPORTARE: Sono presenti errori bloccanti.");
       return;
     }
     const data = products.map(p => ({ SKU: p.sku, EAN: p.ean, ...p.data }));

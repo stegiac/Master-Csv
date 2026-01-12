@@ -52,6 +52,7 @@ export interface ProcessedProduct {
 export interface AppSettings {
   trustedDomains: string[];
   dataPriority: DataSourceType[];
+  disabledSources: DataSourceType[];
   pipelineVersion: string;
 }
 
