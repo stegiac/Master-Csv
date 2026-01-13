@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Layout, Database, FileInput, Settings, PlayCircle, Activity, AlertCircle, ServerCrash } from 'lucide-react';
+import { Layout, Database, FileInput, Settings, PlayCircle, Activity, AlertCircle, CloudLightning, ShieldCheck } from 'lucide-react';
 import { AppSettings, UploadedFile, SchemaField, FileType, ColumnMapping, DataSourceType } from './types';
 import { DEFAULT_SCHEMA, DEFAULT_TRUSTED_DOMAINS } from './constants';
 import FileImportTab from './components/FileImportTab';
@@ -14,7 +14,6 @@ const App: React.FC = () => {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [apiStatus, setApiStatus] = useState<{online: boolean, error?: string} | null>(null);
   
-  // Persistence
   const [schema, setSchema] = useState<SchemaField[]>(() => {
     try {
       const saved = localStorage.getItem('ecom_ai_schema');
@@ -53,8 +52,6 @@ const App: React.FC = () => {
       setApiStatus(status);
     };
     verify();
-    const interval = setInterval(verify, 10000); 
-    return () => clearInterval(interval);
   }, []);
 
   const [brandName, setBrandName] = useState<string>('');
@@ -84,18 +81,21 @@ const App: React.FC = () => {
             <div className="bg-indigo-600 p-2 rounded-lg shadow-indigo-200 shadow-md">
               <Database className="text-white w-6 h-6" />
             </div>
-            <h1 className="text-xl font-bold text-gray-900 tracking-tight">E-Com Import AI Master</h1>
+            <div>
+              <h1 className="text-xl font-bold text-gray-900 tracking-tight leading-none">E-Com Import AI Master</h1>
+              <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-tighter">Pure Static Engine</span>
+            </div>
           </div>
           
           <div className="flex items-center gap-4">
             {apiStatus && (
               <div className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-all ${
-                apiStatus.online && !apiStatus.error 
+                apiStatus.online 
                   ? 'bg-emerald-50 text-emerald-600 border-emerald-100' 
                   : 'bg-red-50 text-red-600 border-red-100 animate-pulse'
               }`}>
-                {apiStatus.online && !apiStatus.error ? <Activity size={12} /> : <ServerCrash size={12} />}
-                {apiStatus.online ? (apiStatus.error ? apiStatus.error : 'SERVER ONLINE') : (apiStatus.error || 'SERVER OFFLINE')}
+                {apiStatus.online ? <CloudLightning size={12} /> : <AlertCircle size={12} />}
+                {apiStatus.online ? 'AI PRONTA (Client)' : (apiStatus.error || 'ERRORE API KEY')}
               </div>
             )}
             <div className="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-1 rounded">V {settings.pipelineVersion}</div>
@@ -104,12 +104,17 @@ const App: React.FC = () => {
       </header>
 
       <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
-        {apiStatus?.error && !apiStatus.online && (
-          <div className="mb-6 bg-red-600 text-white p-4 rounded-xl shadow-lg flex items-center gap-4 border-2 border-red-400">
-            <AlertCircle size={24} />
+        {apiStatus?.error && (
+          <div className="mb-6 bg-red-50 border-2 border-red-200 p-6 rounded-2xl shadow-sm flex items-start gap-4">
+            <div className="bg-red-100 p-3 rounded-full text-red-600">
+              <AlertCircle size={24} />
+            </div>
             <div>
-              <p className="font-bold">ERRORE DI CONNESSIONE AL SERVER (404/NOT FOUND)</p>
-              <p className="text-xs opacity-90">Hostinger non sta eseguendo il file server.js. Verifica che il "Startup File" nel pannello Node.js sia impostato su "server.js".</p>
+              <h2 className="text-lg font-bold text-red-900 leading-tight">Problema di configurazione (Static Build)</h2>
+              <p className="text-red-800 mt-1 text-sm">
+                Il motore AI non può avviarsi perché la <strong>API_KEY</strong> non è stata rilevata durante la compilazione. 
+                <br/>Se sei su Hostinger, assicurati che la variabile d'ambiente sia presente nelle impostazioni del "Build Command" o dei "Secrets".
+              </p>
             </div>
           </div>
         )}
@@ -120,7 +125,16 @@ const App: React.FC = () => {
             <button onClick={() => setActiveTab('schema')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${activeTab === 'schema' ? 'bg-indigo-600 text-white shadow-indigo-100 shadow-lg' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}><Layout size={20} /> Schema Export</button>
             <button onClick={() => setActiveTab('settings')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${activeTab === 'settings' ? 'bg-indigo-600 text-white shadow-indigo-100 shadow-lg' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}><Settings size={20} /> Priorità Fonti</button>
             <div className="pt-4 border-t border-slate-200 mt-4">
-              <button onClick={() => setActiveTab('process')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-black transition-all ${activeTab === 'process' ? 'bg-emerald-600 text-white shadow-emerald-100 shadow-lg' : 'bg-white text-slate-900 shadow-sm border border-slate-200 hover:border-emerald-300'}`}><PlayCircle size={20} /> AVVIA MOTORE AI</button>
+              <button 
+                onClick={() => setActiveTab('process')} 
+                disabled={!apiStatus?.online}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-black transition-all ${
+                  !apiStatus?.online ? 'bg-gray-200 text-gray-400 cursor-not-allowed' :
+                  activeTab === 'process' ? 'bg-emerald-600 text-white shadow-emerald-100 shadow-lg' : 'bg-white text-slate-900 shadow-sm border border-slate-200 hover:border-emerald-300'
+                }`}
+              >
+                <PlayCircle size={20} /> AVVIA MOTORE AI
+              </button>
             </div>
           </nav>
 
@@ -134,6 +148,17 @@ const App: React.FC = () => {
           </div>
         </div>
       </main>
+
+      <footer className="bg-white border-t border-gray-100 py-4 mt-auto">
+        <div className="max-w-7xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center gap-2">
+          <div className="text-[10px] text-gray-400 font-medium">
+            MODALITÀ STATICA ATTIVA • I dati vengono elaborati localmente nel browser • Nessun backend intermedio
+          </div>
+          <div className="flex items-center gap-2 text-[10px] font-bold text-slate-300 uppercase">
+             <ShieldCheck size={12} /> Powered by Gemini Google SDK (Client-Side)
+          </div>
+        </div>
+      </footer>
     </div>
   );
 };
